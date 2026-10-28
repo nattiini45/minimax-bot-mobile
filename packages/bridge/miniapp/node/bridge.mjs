@@ -253,7 +253,7 @@ export class Bridge {
     this.pending = new PendingSet();
     this.runner = new AgentRunner(context, {
       pending: this.pending,
-      onEvent: (type, payload) => this.emit(type, payload),
+      onEvent: (type, payload) => this.handleEvent(type, payload),
       onTurnFinished: (info) => this.onTurnFinished(info),
     });
     this.relay = new RelayClient({
@@ -316,6 +316,23 @@ export class Bridge {
 
   emit(type, payload) {
     this.relay.send(createFrame({ type, payload, source: 'bridge' }));
+  }
+
+  /**
+   * Sends an event to the phones and keeps the conversation it belongs to.
+   *
+   * The team's replies are part of the thread. A phone that opens a chat later, or a
+   * second phone that joins, must see them — not only the messages that phone sent
+   * itself.
+   */
+  handleEvent(type, payload) {
+    if (type === 'evt.message_committed') {
+      const message = payload?.message;
+      if (message && message.role === 'assistant' && message.chatId) {
+        this.pushHistory(message.chatId, message);
+      }
+    }
+    this.emit(type, payload);
   }
 
   /**
@@ -734,7 +751,14 @@ export class Bridge {
 
   pushHistory(chatId, message) {
     const list = this.history.get(chatId) ?? [];
-    list.push(message);
+    // A turn can commit more than once: the team narrates while it works. The newest
+    // version of a message replaces the one before it, exactly as the phone renders it.
+    const index = list.findIndex((entry) => entry.messageId === message.messageId);
+    if (index >= 0) {
+      list[index] = message;
+    } else {
+      list.push(message);
+    }
     if (list.length > HISTORY_LIMIT) list.splice(0, list.length - HISTORY_LIMIT);
     this.history.set(chatId, list);
   }

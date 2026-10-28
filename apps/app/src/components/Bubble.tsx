@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '../theme';
 
@@ -14,11 +14,15 @@ export function Bubble({
   text,
   pending,
   author,
+  reactions,
+  onLongPress,
 }: {
   role: 'user' | 'assistant' | 'system' | 'tool';
   text: string;
   pending?: boolean;
   author?: string;
+  reactions?: { emoji: string; count: number }[];
+  onLongPress?: () => void;
 }) {
   const theme = useTheme();
 
@@ -36,7 +40,12 @@ export function Bubble({
 
   return (
     <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      <View
+      <Pressable
+        onLongPress={onLongPress}
+        delayLongPress={280}
+        disabled={!onLongPress}
+        accessibilityRole={onLongPress ? 'button' : undefined}
+        accessibilityLabel={onLongPress ? 'React to this message' : undefined}
         style={[
           styles.bubble,
           {
@@ -58,7 +67,22 @@ export function Bubble({
             {isUser ? 'sending…' : 'streaming…'}
           </Text>
         ) : null}
-      </View>
+      </Pressable>
+      {reactions && reactions.length > 0 ? (
+        <View style={[styles.reactions, isUser ? styles.reactionsUser : styles.reactionsAssistant]}>
+          {reactions.map((reaction) => (
+            <View
+              key={reaction.emoji}
+              style={[styles.reaction, { backgroundColor: theme.colors.tag, borderColor: theme.colors.line }]}
+            >
+              <Text style={styles.reactionEmoji}>{reaction.emoji}</Text>
+              {reaction.count > 1 ? (
+                <Text style={[styles.reactionCount, { color: theme.colors.muted }]}>{reaction.count}</Text>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -94,6 +118,33 @@ const styles = StyleSheet.create({
   pending: {
     fontSize: 11,
     marginTop: 4,
+  },
+  reactions: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 4,
+  },
+  reactionsUser: {
+    justifyContent: 'flex-end',
+  },
+  reactionsAssistant: {
+    justifyContent: 'flex-start',
+  },
+  reaction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  reactionEmoji: {
+    fontSize: 12,
+  },
+  reactionCount: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   systemRow: {
     alignItems: 'center',

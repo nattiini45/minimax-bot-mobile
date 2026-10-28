@@ -177,6 +177,20 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
           turnId: 'turn-1',
         });
         options?.onEvent?.({
+          type: 'tool.started',
+          sessionId: 'sess-1',
+          turnId: 'turn-1',
+          name: 'bash',
+          input: 'ls -la',
+        });
+        options?.onEvent?.({
+          type: 'tool.finished',
+          sessionId: 'sess-1',
+          turnId: 'turn-1',
+          name: 'bash',
+          ok: true,
+        });
+        options?.onEvent?.({
           type: 'text.delta',
           sessionId: 'sess-1',
           turnId: 'turn-1',
@@ -391,6 +405,37 @@ test('the turn lifecycle is published', async () => {
   await dispose();
 });
 
+test('the conversation survives a reload, with the team replies in it', async () => {
+  const { bridge, dispose } = await makeBridge();
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
+
+  const history = /** @type {any} */ (await bridge.dispatch('op.list_history', { chatId: 'bot:b1' }));
+  const roles = history.messages.map((/** @type {any} */ message) => message.role);
+  // A phone that opens the chat later must see the whole thread, not only what it sent.
+  assert.ok(roles.includes('user'));
+  assert.ok(roles.includes('assistant'));
+  await dispose();
+});
+
+test('every tool the team runs is published with how long it took', async () => {  const { bridge, sent, dispose } = await makeBridge();
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
+
+  const started = sent.find((frame) => frame.type === 'evt.tool_started');
+  assert.ok(started);
+  assert.equal(started.payload.toolName, 'bash');
+  assert.equal(started.payload.turnId, 'turn-1');
+  assert.equal(started.payload.toolInput, 'ls -la');
+
+  const finished = sent.find((frame) => frame.type === 'evt.tool_finished');
+  assert.ok(finished);
+  assert.equal(finished.payload.toolName, 'bash');
+  assert.equal(finished.payload.ok, true);
+  // The host does not report a duration, so the bridge times the call itself.
+  assert.equal(typeof finished.payload.usage.durationMs, 'number');
+  assert.ok(finished.payload.usage.durationMs >= 0);
+  await dispose();
+});
+
 test('the same opId is executed once', async () => {
   const { bridge, agentRuns, dispose } = await makeBridge();
   const frame = { v: 1, id: 'f1', ts: 1, type: 'op.send_message', source: 'app', payload: { chatId: 'bot:b1', text: 'Hi' }, opId: 'op-1' };
@@ -555,8 +600,11 @@ test('history accumulates the messages of a chat', async () => {
   await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'two' });
 
   const history = /** @type {HistoryResult} */ (await bridge.dispatch('op.list_history', { chatId: 'bot:b1' }));
-  assert.equal(history.messages.length, 2);
-  assert.equal(history.messages[0].text, 'one');
+  const mine = history.messages.filter((message) => message.role === 'user');
+  assert.equal(mine.length, 2);
+  assert.equal(mine[0].text, 'one');
+  // The team's replies are part of the thread as well.
+  assert.ok(history.messages.some((message) => message.role === 'assistant'));
   await dispose();
 });
 

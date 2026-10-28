@@ -23,6 +23,8 @@ export class AgentRunner {
     this.sessions = new Map();
     /** @type {Map<string, AbortController>} turnId -> controller */
     this.aborts = new Map();
+    /** @type {Map<string, number>} `turnId:tool` -> the moment the tool started */
+    this.toolStarts = new Map();
     this.activeRuns = 0;
   }
 
@@ -193,21 +195,33 @@ export class AgentRunner {
         break;
 
       case 'tool.started':
+        this.toolStarts.set(toolKey(event.turnId, event.name), Date.now());
         this.onEvent('evt.tool_started', {
           chatId,
           turnId: event.turnId,
           toolName: event.name,
+          ...(describeInput(event) === undefined ? {} : { toolInput: describeInput(event) }),
         });
         break;
 
-      case 'tool.finished':
+      case 'tool.finished': {
+        const key = toolKey(event.turnId, event.name);
+        const startedAt = this.toolStarts.get(key);
+        this.toolStarts.delete(key);
+        // The host does not always report how long a tool took, so the bridge times it
+        // itself: the phone shows a real duration rather than a blank.
+        const reported = event.usage && typeof event.usage.durationMs === 'number' ? event.usage.durationMs : undefined;
+        const durationMs = startedAt === undefined ? reported : Date.now() - startedAt;
         this.onEvent('evt.tool_finished', {
           chatId,
           turnId: event.turnId,
           toolName: event.name,
           ok: event.ok === true,
+          ...(durationMs === undefined ? {} : { usage: { durationMs } }),
+          ...(event.error ? { error: String(event.error) } : {}),
         });
         break;
+      }
 
       case 'permission.requested': {
         const request = {
@@ -238,6 +252,10 @@ export class AgentRunner {
       }
 
       case 'turn.finished':
+        // A tool that never reported back would otherwise keep its start time forever.
+        for (const key of [...this.toolStarts.keys()]) {
+          if (key.startsWith(`${event.turnId ?? 'unknown'}:`)) this.toolStarts.delete(key);
+        }
         this.onEvent('evt.turn_finished', {
           chatId,
           turnId: event.turnId,
@@ -260,6 +278,33 @@ export function messageIdFor(chatId, turnId) {
 
 export function authorIdFor(chatId) {
   return chatId.startsWith('bot:') ? chatId.slice(4) : undefined;
+}
+
+/**
+ * Key for a running tool.
+ *
+ * The same tool can run twice in one turn, so the turn is part of the key.
+ */
+function toolKey(turnId, toolName) {
+  return `${turnId ?? 'unknown'}:${toolName ?? 'unknown'}`;
+}
+
+/**
+ * Describes a tool call's input for the phone.
+ *
+ * The host is not consistent about the field it uses, so every known spelling is
+ * accepted. An input that is not text is rendered as JSON, and an input that is
+ * missing entirely is left out rather than shown as an empty string.
+ */
+function describeInput(event) {
+  const raw = event.input ?? event.args ?? event.arguments ?? event.toolInput;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'string') return raw.length > 0 ? raw : undefined;
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -39,6 +39,17 @@ export interface AppState {
   diagnostics: Diagnostics;
 
   messages: Record<string, AppMessage[]>;
+  /**
+   * The tool calls of the current turn, per chat.
+   *
+   * The bridge reports every tool the team runs. The phone keeps them so the chat can
+   * show what the team is doing while it works, instead of a long silence.
+   */
+  activity: Record<string, AppActivity[]>;
+  /** The turn each chat is currently running. */
+  activeTurn: Record<string, string>;
+  /** Reactions per message id. */
+  reactions: Record<string, { messageId: string; emoji: string; count: number }[]>;
   tasks: AppTask[];
   /**
    * Why the task list may be incomplete.
@@ -87,6 +98,8 @@ export interface AppState {
    * bridge echoes it back, so the committed message replaces the bubble in place.
    */
   sendChatMessage: (chatId: string, text: string) => void;
+  /** Adds a reaction to a message. The bridge confirms it with `evt.reaction_added`. */
+  react: (messageId: string, emoji: string) => void;
   flushOutbox: () => void;
   /** Re-reads everything the phone can show: the roster, tasks, helpers and schedules. */
   refreshTeam: () => void;
@@ -191,6 +204,31 @@ export interface AppUsage {
   byBot: { botId: string; name: string; turns: number; chars: number; tools: number }[];
   totals: { turns: number; chars: number; tools: number; durationMs: number; errors: number };
 }
+
+/**
+ * One tool call inside a turn.
+ *
+ * The bridge reports every tool the team runs, so the phone can show the work and not
+ * only its result: which tool ran, how long it took, and whether it failed.
+ */
+export interface AppActivity {
+  id: string;
+  chatId: string;
+  turnId: string;
+  toolName: string;
+  /** `running` until the tool reports back. */
+  status: 'running' | 'ok' | 'failed';
+  startedAt: number;
+  durationMs?: number;
+  error?: string;
+  toolInput?: string;
+}
+
+/** How many tool calls are kept per chat. */
+const ACTIVITY_LIMIT = 40;
+
+/** How many reactions are kept per message. */
+const REACTION_LIMIT = 12;
 
 const SESSION_KEY = 'minimax-bot.session';
 const OUTBOX_KEY = 'minimax-bot.outbox';
@@ -316,6 +354,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   messages: {},
+  activity: {},
+  activeTurn: {},
+  reactions: {},
   tasks: [],
   tasksNote: null,
   helpers: [],
@@ -457,6 +498,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  react: (messageId, emoji) => {
+    if (!messageId || !emoji) return;
+    // The bridge owns the count, so the phone does not guess it: it asks, and the
+    // bridge answers with `evt.reaction_added`.
+    get().request('op.react', { messageId, emoji });
+  },
+
   applyFrame: (frame) => {
     const state = get();
     // The envelope is typed loosely on purpose; the payload shape depends on the frame type.
@@ -594,13 +642,91 @@ export const useAppStore = create<AppState>((set, get) => ({
         break;
       }
 
+      case 'evt.turn_started': {
+        const { chatId, turnId } = p as { chatId?: string; turnId?: string };
+        if (!chatId || !turnId) break;
+        set({ activeTurn: { ...state.activeTurn, [chatId]: turnId } });
+        break;
+      }
+
+      case 'evt.tool_started': {
+        const { chatId, turnId, toolName, toolInput } = p as {
+          chatId?: string;
+          turnId?: string;
+          toolName?: string;
+          toolInput?: string;
+        };
+        if (!chatId || !turnId || !toolName) break;
+        const list = state.activity[chatId] ?? [];
+        const entry: AppActivity = {
+          id: `${turnId}:${toolName}:${list.length}`,
+          chatId,
+          turnId,
+          toolName,
+          status: 'running',
+          startedAt: Date.now(),
+          ...(toolInput ? { toolInput } : {}),
+        };
+        set({ activity: { ...state.activity, [chatId]: [...list, entry].slice(-ACTIVITY_LIMIT) } });
+        break;
+      }
+
+      case 'evt.tool_finished': {
+        const { chatId, turnId, toolName, ok, usage, error } = p as {
+          chatId?: string;
+          turnId?: string;
+          toolName?: string;
+          ok?: boolean;
+          usage?: { durationMs?: number };
+          error?: string;
+        };
+        if (!chatId || !turnId || !toolName) break;
+        const list = state.activity[chatId] ?? [];
+        // The same tool can run twice in one turn, so the newest unfinished call with
+        // this name is the one that reported back.
+        let index = -1;
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+          const entry = list[i]!;
+          if (entry.turnId === turnId && entry.toolName === toolName && entry.status === 'running') {
+            index = i;
+            break;
+          }
+        }
+        if (index < 0) break;
+        const durationMs = typeof usage?.durationMs === 'number' ? usage.durationMs : undefined;
+        const next = [...list];
+        next[index] = {
+          ...next[index]!,
+          status: ok === true ? 'ok' : 'failed',
+          ...(durationMs === undefined ? {} : { durationMs }),
+          ...(error ? { error } : {}),
+        };
+        set({ activity: { ...state.activity, [chatId]: next } });
+        break;
+      }
+
       case 'evt.turn_finished': {
         const { chatId } = p as { chatId?: string };
         if (!chatId) break;
         const list = (state.messages[chatId] ?? []).map((message) =>
           message.pending ? { ...message, pending: false } : message,
         );
-        set({ messages: { ...state.messages, [chatId]: list } });
+        const activeTurn = { ...state.activeTurn };
+        delete activeTurn[chatId];
+        set({ messages: { ...state.messages, [chatId]: list }, activeTurn });
+        break;
+      }
+
+      case 'evt.reaction_added': {
+        const reaction = p.reaction as { messageId?: string; emoji?: string } | undefined;
+        if (!reaction?.messageId || !reaction.emoji) break;
+        const list = state.reactions[reaction.messageId] ?? [];
+        const index = list.findIndex((entry) => entry.emoji === reaction.emoji);
+        const next =
+          index >= 0
+            ? list.map((entry, i) => (i === index ? { ...entry, count: entry.count + 1 } : entry))
+            : [...list, { messageId: reaction.messageId, emoji: reaction.emoji, count: 1 }];
+        set({ reactions: { ...state.reactions, [reaction.messageId]: next.slice(0, REACTION_LIMIT) } });
         break;
       }
 

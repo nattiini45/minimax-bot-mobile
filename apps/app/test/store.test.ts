@@ -18,6 +18,9 @@ function reset() {
     tools: [],
     diagnostics: { agentAvailable: false, teamToolsAvailable: false, toolCount: 0, partial: false },
     messages: {},
+    activity: {},
+    activeTurn: {},
+    reactions: {},
     tasks: [],
     helpers: [],
     schedules: [],
@@ -252,6 +255,104 @@ describe('bridge status', () => {
       createFrame({ type: 'hello.ok', payload: { seq: 4, bridgeOnline: true }, source: 'relay' }),
     );
     expect(useAppStore.getState().bridgeOnline).toBe(true);
+  });
+});
+
+describe('the live trace', () => {
+  beforeEach(reset);
+
+  it('remembers the turn a chat is running', () => {
+    useAppStore.getState().applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    expect(useAppStore.getState().activeTurn['bot:b1']).toBe('t1');
+  });
+
+  it('records a tool call while it runs and closes it when it reports back', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', toolInput: 'ls' }),
+    );
+
+    let entry = useAppStore.getState().activity['bot:b1']?.[0];
+    expect(entry?.toolName).toBe('bash');
+    expect(entry?.status).toBe('running');
+    expect(entry?.toolInput).toBe('ls');
+
+    store.applyFrame(
+      event('evt.tool_finished', {
+        chatId: 'bot:b1',
+        turnId: 't1',
+        toolName: 'bash',
+        ok: true,
+        usage: { durationMs: 489 },
+      }),
+    );
+
+    entry = useAppStore.getState().activity['bot:b1']?.[0];
+    expect(entry?.status).toBe('ok');
+    expect(entry?.durationMs).toBe(489);
+  });
+
+  it('marks a failed tool as failed and keeps the reason', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
+    store.applyFrame(
+      event('evt.tool_finished', {
+        chatId: 'bot:b1',
+        turnId: 't1',
+        toolName: 'bash',
+        ok: false,
+        error: 'permission denied',
+      }),
+    );
+
+    const entry = useAppStore.getState().activity['bot:b1']?.[0];
+    expect(entry?.status).toBe('failed');
+    expect(entry?.error).toBe('permission denied');
+  });
+
+  it('closes the newest open call when a tool runs twice in one turn', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
+    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
+    store.applyFrame(
+      event('evt.tool_finished', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', ok: true }),
+    );
+
+    const list = useAppStore.getState().activity['bot:b1'] ?? [];
+    expect(list).toHaveLength(2);
+    expect(list[0]?.status).toBe('running');
+    expect(list[1]?.status).toBe('ok');
+  });
+
+  it('forgets the running turn when it finishes', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(event('evt.turn_finished', { chatId: 'bot:b1', turnId: 't1', status: 'finished' }));
+
+    expect(useAppStore.getState().activeTurn['bot:b1']).toBeUndefined();
+  });
+});
+
+describe('reactions', () => {
+  beforeEach(reset);
+
+  it('counts the same emoji on one message', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.reaction_added', { reaction: { messageId: 'm1', emoji: '👍' } }));
+    store.applyFrame(event('evt.reaction_added', { reaction: { messageId: 'm1', emoji: '👍' } }));
+
+    const list = useAppStore.getState().reactions['m1'];
+    expect(list).toHaveLength(1);
+    expect(list?.[0]?.count).toBe(2);
+  });
+
+  it('keeps different emoji apart', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.reaction_added', { reaction: { messageId: 'm1', emoji: '👍' } }));
+    store.applyFrame(event('evt.reaction_added', { reaction: { messageId: 'm1', emoji: '🎉' } }));
+
+    expect(useAppStore.getState().reactions['m1']).toHaveLength(2);
   });
 });
 

@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ActivityRail } from '../../src/components/ActivityRail';
 import { Avatar } from '../../src/components/Avatar';
 import { Bubble } from '../../src/components/Bubble';
 import { EmptyState } from '../../src/components/primitives';
@@ -20,6 +21,9 @@ import { notify } from '../../src/native/notifications';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 import type { AppMessage } from '../../src/state/store';
+
+/** The reactions offered when a message is held down. */
+const REACTION_EMOJI = ['👍', '🎉', '🔥', '👀', '✅'];
 
 /**
  * A conversation.
@@ -38,10 +42,15 @@ export default function ChatScreen() {
   const bots = useAppStore((state) => state.bots);
   const groups = useAppStore((state) => state.groups);
   const messages = useAppStore((state) => state.messages[chatId]);
+  const activity = useAppStore((state) => state.activity[chatId]);
+  const activeTurn = useAppStore((state) => state.activeTurn[chatId]);
+  const reactions = useAppStore((state) => state.reactions);
   const requestAsync = useAppStore((state) => state.requestAsync);
   const sendChatMessage = useAppStore((state) => state.sendChatMessage);
+  const react = useAppStore((state) => state.react);
 
   const [draft, setDraft] = useState('');
+  const [reactingTo, setReactingTo] = useState<string | null>(null);
   const listRef = useRef<FlatList<AppMessage>>(null);
   const lastCount = useRef(0);
 
@@ -96,6 +105,8 @@ export default function ChatScreen() {
             text={item.text}
             pending={item.pending}
             author={item.role === 'assistant' ? (bot?.name ?? group?.name) : undefined}
+            reactions={reactions[item.messageId]}
+            onLongPress={item.role === 'assistant' ? () => setReactingTo(item.messageId) : undefined}
           />
         )}
         contentContainerStyle={styles.list}
@@ -107,6 +118,12 @@ export default function ChatScreen() {
           />
         }
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+      />
+
+      <ActivityRail
+        activity={activity ?? []}
+        activeTurn={activeTurn}
+        actorName={bot?.name ?? group?.name}
       />
 
       {group ? (
@@ -139,6 +156,34 @@ export default function ChatScreen() {
         >
           Bot details
         </Text>
+      ) : null}
+
+      {reactingTo ? (
+        <View style={[styles.reactionBar, { backgroundColor: theme.colors.bg, borderTopColor: theme.colors.line }]}>
+          {REACTION_EMOJI.map((emoji) => (
+            <Pressable
+              key={emoji}
+              onPress={() => {
+                tapLight();
+                react(reactingTo, emoji);
+                setReactingTo(null);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`React ${emoji}`}
+              style={[styles.reactionButton, { backgroundColor: theme.colors.surface, borderColor: theme.colors.line }]}
+            >
+              <Text style={styles.reactionEmoji}>{emoji}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            onPress={() => setReactingTo(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel reaction"
+            style={styles.reactionCancel}
+          >
+            <Text style={[styles.reactionCancelText, { color: theme.colors.subtle }]}>Cancel</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       <View
@@ -204,6 +249,32 @@ const styles = StyleSheet.create({
   mentions: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingVertical: 8,
+  },
+  reactionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  reactionButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  reactionEmoji: {
+    fontSize: 18,
+  },
+  reactionCancel: {
+    marginLeft: 'auto',
+    paddingHorizontal: 6,
+  },
+  reactionCancelText: {
+    fontSize: 13,
   },
   mentionRow: {
     paddingHorizontal: 14,
