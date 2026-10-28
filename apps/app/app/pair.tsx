@@ -16,13 +16,22 @@ import { connectRelay, useAppStore } from '../src/state/store';
  * The desktop shows a six digit code; the phone types it here. The relay exchanges the
  * code for a device scoped token, and that token is the only credential this app holds.
  */
+/**
+ * The relay address the app offers by default.
+ *
+ * `EXPO_PUBLIC_RELAY_URL` is inlined into the bundle at build time, so a published
+ * build can point at one relay without the user typing it. It stays editable: a
+ * self-hosted relay is still one field away.
+ */
+const DEFAULT_RELAY_URL = process.env.EXPO_PUBLIC_RELAY_URL ?? '';
+
 export default function PairScreen() {
   const theme = useTheme();
   const router = useRouter();
   const setSession = useAppStore((state) => state.setSession);
   const setError = useAppStore((state) => state.setError);
 
-  const [relayUrl, setRelayUrl] = useState('');
+  const [relayUrl, setRelayUrl] = useState(DEFAULT_RELAY_URL);
   const [accountId, setAccountId] = useState('default');
   const [code, setCode] = useState('');
   const [error, setErrorState] = useState<string | null>(null);
