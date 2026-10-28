@@ -7,14 +7,17 @@
  */
 
 import {
+  CLOSE_CODE,
   DEVICE_TOKEN_TTL_MS,
   PAIRING_CODE_TTL_MS,
   generatePairingCode,
+  issueToken,
+  verifyToken,
   type PairingResponse,
   type PeerRole,
+  type TokenPayload,
 } from '@minimax-bot/protocol';
 
-import { issueToken, verifyToken, type TokenPayload } from './auth.js';
 import { SeqRing } from './ring.js';
 
 export interface SocketLike {
@@ -205,7 +208,7 @@ export class RelaySession {
     const socket = this.deviceSockets.get(deviceId);
     if (socket) {
       try {
-        socket.socket.close(4003, 'DEVICE_REVOKED');
+        socket.socket.close(CLOSE_CODE.deviceRevoked, 'DEVICE_REVOKED');
       } catch {
         /* the socket may already be gone */
       }
@@ -223,8 +226,10 @@ export class RelaySession {
   /**
    * Registers a peer socket.
    *
-   * Returns the replay payload for a device that is resuming, or `null` when the peer is
-   * not authorized. Unauthorized sockets are closed rather than left hanging.
+   * Returns the replay payload for a device that is resuming, or the close code the
+   * peer should be closed with when it is not authorized. The socket is *not* closed
+   * here: the transport accepts the upgrade first and closes the socket afterwards,
+   * so the peer receives the close code instead of a bare HTTP error.
    */
   async registerSocket(params: {
     id: string;
@@ -234,26 +239,19 @@ export class RelaySession {
     socket: SocketLike;
     name?: string;
     lastSeq?: number;
-  }): Promise<{ replay: { entries: { seq: number; data: string }[]; truncated: boolean } } | null> {
+  }): Promise<
+    | { ok: true; replay: { entries: { seq: number; data: string }[]; truncated: boolean } }
+    | { ok: false; code: number; reason: string }
+  > {
     const payload = await verifyToken(params.token, this.secret);
     if (!payload || payload.sub !== params.subject || payload.role !== params.role) {
-      try {
-        params.socket.close(4001, 'UNAUTHORIZED');
-      } catch {
-        /* ignore */
-      }
-      return null;
+      return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
     }
 
     if (params.role === 'device') {
       const device = this.devices.get(params.subject);
       if (!device || device.revoked || device.token !== params.token) {
-        try {
-          params.socket.close(4003, 'DEVICE_REVOKED');
-        } catch {
-          /* ignore */
-        }
-        return null;
+        return { ok: false, code: CLOSE_CODE.deviceRevoked, reason: 'DEVICE_REVOKED' };
       }
       const peer: PeerSocket = {
         id: params.id,
@@ -265,20 +263,20 @@ export class RelaySession {
       const previous = this.deviceSockets.get(params.subject);
       if (previous && previous.id !== peer.id) {
         try {
-          previous.socket.close(4000, 'REPLACED');
+          previous.socket.close(CLOSE_CODE.replaced, 'REPLACED');
         } catch {
           /* ignore */
         }
       }
       this.deviceSockets.set(params.subject, peer);
       const replay = this.ring.since(params.lastSeq ?? 0);
-      return { replay };
+      return { ok: true, replay };
     }
 
     // Bridge: only one at a time; a new bridge replaces the old one.
     if (this.bridgeSocket && this.bridgeSocket.id !== params.id) {
       try {
-        this.bridgeSocket.socket.close(4000, 'REPLACED');
+        this.bridgeSocket.socket.close(CLOSE_CODE.replaced, 'REPLACED');
       } catch {
         /* ignore */
       }
@@ -290,7 +288,7 @@ export class RelaySession {
       socket: params.socket,
       name: params.name,
     };
-    return { replay: { entries: [], truncated: false } };
+    return { ok: true, replay: { entries: [], truncated: false } };
   }
 
   unregisterSocket(id: string): void {

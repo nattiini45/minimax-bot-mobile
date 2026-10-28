@@ -6,7 +6,7 @@
  * {@link RelaySession}.
  */
 
-import { describeRelayError, type RelayErrorCode } from '@minimax-bot/protocol';
+import { describeRelayError, verifyToken, type RelayErrorCode } from '@minimax-bot/protocol';
 
 import { Relay, type RelayEnv } from './relay.js';
 
@@ -163,7 +163,6 @@ function bearer(request: Request): string {
 }
 
 async function verifyBridge(token: string, bridgeId: string, secret: string): Promise<boolean> {
-  const { verifyToken } = await import('./auth.js');
   const payload = await verifyToken(token, secret);
   return payload !== null && payload.role === 'bridge' && payload.sub === bridgeId;
 }
@@ -183,7 +182,6 @@ async function authorizeBridge(
 ): Promise<boolean> {
   const token = bearer(request);
   if (!token) return false;
-  const { verifyToken } = await import('./auth.js');
   const payload = await verifyToken(token, secret);
   if (!payload || payload.role !== 'bridge') return false;
   const owner = await stub.ownerBridgeId();

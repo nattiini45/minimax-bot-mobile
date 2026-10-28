@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../..",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "mint:token": "npm run build -w @minimax-bot/protocol && node scripts/mint-bridge-token.mjs"
   },
   "dependencies": {
     "@minimax-bot/protocol": "*"

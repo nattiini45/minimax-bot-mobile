@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { issueToken, signToken, verifyToken } from '../src/auth.js';
+import { CLOSE_CODE, issueToken, signToken, verifyToken } from '@minimax-bot/protocol';
+
 import { RelaySession, type SessionOptions, type SocketLike } from '../src/session.js';
 
 const SECRET = 'test-secret-value';
@@ -129,7 +130,7 @@ describe('pairing', () => {
 });
 
 describe('socket registration', () => {
-  it('rejects a device with a bad token and closes the socket', async () => {
+  it('rejects a device with a bad token and says why', async () => {
     const session = makeSession();
     const socket = new FakeSocket();
 
@@ -141,8 +142,14 @@ describe('socket registration', () => {
       socket,
     });
 
-    expect(result).toBeNull();
-    expect(socket.closed?.code).toBe(4001);
+    // The socket is closed by the transport, not here: the peer has to be told the
+    // reason, and a close code is the only way it can hear it.
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(CLOSE_CODE.unauthorized);
+      expect(result.reason).toBe('UNAUTHORIZED');
+    }
+    expect(socket.closed).toBeNull();
   });
 
   it('rejects a token whose subject does not match', async () => {
@@ -158,8 +165,8 @@ describe('socket registration', () => {
       socket,
     });
 
-    expect(result).toBeNull();
-    expect(socket.closed?.code).toBe(4001);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
   });
 
   it('rejects a revoked device', async () => {
@@ -176,8 +183,8 @@ describe('socket registration', () => {
       socket,
     });
 
-    expect(result).toBeNull();
-    expect(socket.closed?.code).toBe(4003);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(CLOSE_CODE.deviceRevoked);
   });
 
   it('accepts a paired device', async () => {
@@ -193,7 +200,7 @@ describe('socket registration', () => {
       socket,
     });
 
-    expect(result).not.toBeNull();
+    expect(result.ok).toBe(true);
     expect(session.deviceSocketCount).toBe(1);
   });
 
@@ -206,7 +213,7 @@ describe('socket registration', () => {
     await session.registerSocket({ id: 'p1', role: 'bridge', subject: 'bridge-1', token, socket: first });
     await session.registerSocket({ id: 'p2', role: 'bridge', subject: 'bridge-1', token, socket: second });
 
-    expect(first.closed?.code).toBe(4000);
+    expect(first.closed?.code).toBe(CLOSE_CODE.replaced);
     expect(session.status().bridgeOnline).toBe(true);
   });
 });
@@ -294,8 +301,9 @@ describe('frame routing', () => {
       lastSeq: 1,
     });
 
-    expect(result?.replay.truncated).toBe(false);
-    expect(result?.replay.entries.map((entry) => entry.seq)).toEqual([2, 3]);
+    if (!result.ok) throw new Error(`expected the device to be accepted: ${result.reason}`);
+    expect(result.replay.truncated).toBe(false);
+    expect(result.replay.entries.map((entry) => entry.seq)).toEqual([2, 3]);
   });
 
   it('flags truncation when a resuming device fell behind the buffer', async () => {
@@ -321,7 +329,8 @@ describe('frame routing', () => {
       lastSeq: 0,
     });
 
-    expect(result?.replay.truncated).toBe(true);
+    if (!result.ok) throw new Error(`expected the device to be accepted: ${result.reason}`);
+    expect(result.replay.truncated).toBe(true);
   });
 
   it('drops a device socket when it unregisters', async () => {

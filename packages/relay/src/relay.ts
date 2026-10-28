@@ -6,6 +6,8 @@
  * registry lives in one place.
  */
 
+import { DurableObject } from 'cloudflare:workers';
+
 import { newId } from '@minimax-bot/protocol';
 
 import { RelaySession, type PeerSocket, type SocketLike } from './session.js';
@@ -18,22 +20,22 @@ interface SocketEntry {
   peer: PeerSocket;
 }
 
-export class Relay {
-  /**
-   * Brands the class for the Workers RPC type system.
-   *
-   * Without it `DurableObjectStub<Relay>` resolves to `Fetcher<undefined>` and the
-   * Worker's RPC calls (`stub.pairDevice`, `stub.status`, …) are invisible to `tsc`.
-   */
-  declare readonly __DURABLE_OBJECT_BRAND: never;
-
+/**
+ * The Durable Object that holds one account's room.
+ *
+ * It extends the `DurableObject` base class from `cloudflare:workers` on purpose. The
+ * Worker reaches the object through `stub.createPairingCode(...)` and friends, which is
+ * Workers RPC: the runtime only serves those calls when the class extends the base
+ * class. A class written in the older style still type-checks (and the stub still
+ * answers `fetch`), but every RPC call fails at runtime with "the receiving Durable
+ * Object does not support RPC" — which is exactly what the first live run showed.
+ */
+export class Relay extends DurableObject<RelayEnv> {
   private readonly session: RelaySession;
   private readonly sockets = new Map<WebSocket, SocketEntry>();
 
-  constructor(
-    private readonly state: DurableObjectState,
-    env: RelayEnv,
-  ) {
+  constructor(ctx: DurableObjectState, env: RelayEnv) {
+    super(ctx, env);
     this.session = new RelaySession({ secret: env.RELAY_SECRET });
   }
 
@@ -71,7 +73,7 @@ export class Relay {
 
   // -- WebSocket transport -------------------------------------------------
 
-  async fetch(request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.endsWith('/ws')) {
       return new Response('not found', { status: 404 });
@@ -110,9 +112,19 @@ export class Relay {
       lastSeq: Number.isFinite(lastSeq) ? lastSeq : undefined,
     });
 
-    if (!registered) {
-      // The session already closed the socket with the right close code.
-      return new Response('unauthorized', { status: 401 });
+    if (!registered.ok) {
+      // The upgrade is accepted and the socket is closed with the reason. Answering
+      // the handshake with an HTTP error instead would reach the peer as a bare
+      // "connection failed": a phone that was unpaired on the desktop could not tell
+      // that apart from a relay that is merely down, and would retry a credential
+      // that can never work.
+      server.accept();
+      try {
+        server.close(registered.code, registered.reason);
+      } catch {
+        /* the socket may already be gone */
+      }
+      return new Response(null, { status: 101, webSocket: client });
     }
 
     // The socket is accepted with `server.accept()` rather than
@@ -120,8 +132,23 @@ export class Relay {
     // evicted while the socket is open, and every piece of this relay's state — the
     // sequence counter, the replay ring, the device registry — lives in memory. An
     // eviction would silently reset all of it and drop every frame.
+    //
+    // Because the socket is *not* a hibernating one, its events are delivered to the
+    // listeners registered here. The `webSocketMessage` handler on the class is only
+    // ever called for a socket accepted with `state.acceptWebSocket()`; relying on it
+    // would mean the relay never sees a single frame the peers send.
     server.accept();
     this.sockets.set(server, { peer });
+
+    server.addEventListener('message', (event) => {
+      this.onSocketMessage(server, event.data);
+    });
+    server.addEventListener('close', () => {
+      this.onSocketClose(server);
+    });
+    server.addEventListener('error', () => {
+      this.onSocketClose(server);
+    });
 
     if (role === 'device') {
       const hello = {
@@ -146,22 +173,28 @@ export class Relay {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+  /** Handles one frame that arrived on a peer socket. */
+  private onSocketMessage(ws: WebSocket, data: unknown): void {
     const entry = this.sockets.get(ws);
     if (!entry) return;
-    const raw = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    const raw =
+      typeof data === 'string'
+        ? data
+        : data instanceof ArrayBuffer
+          ? new TextDecoder().decode(data)
+          : ArrayBuffer.isView(data)
+            ? new TextDecoder().decode(data)
+            : '';
+    if (!raw) return;
     this.session.handleFrame(entry.peer, raw);
   }
 
-  webSocketClose(ws: WebSocket): void {
+  /** Forgets a peer socket that has closed or failed. */
+  private onSocketClose(ws: WebSocket): void {
     const entry = this.sockets.get(ws);
     if (!entry) return;
     this.sockets.delete(ws);
     this.session.unregisterSocket(entry.peer.id);
-  }
-
-  webSocketError(ws: WebSocket): void {
-    this.webSocketClose(ws);
   }
 
   private sendTo(ws: WebSocket, data: string): void {
