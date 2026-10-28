@@ -319,10 +319,17 @@ export class RelaySession {
       this.sendToBridge(raw);
       return;
     }
-    const stamped = this.stampSeq(raw);
-    if (!stamped) return;
-    this.ring.push(this.seq, stamped);
-    this.broadcastToDevices(stamped);
+    const prepared = this.prepare(raw);
+    if (!prepared) return;
+    if (!prepared.buffered) {
+      // Control frames answer exactly one request. Buffering them would replay the
+      // answers to requests a resuming device never made — a stale `ack` looks like a
+      // result, and a stale `err` looks like a failure that just happened.
+      this.broadcastToDevices(prepared.data);
+      return;
+    }
+    this.ring.push(this.seq, prepared.data);
+    this.broadcastToDevices(prepared.data);
   }
 
   status(): SessionStatus {
@@ -349,12 +356,13 @@ export class RelaySession {
   // -- internals -----------------------------------------------------------
 
   /**
-   * Stamps a monotonic `seq` onto an event frame.
+   * Prepares a bridge frame for delivery.
    *
-   * Only `evt.*` frames are sequenced and buffered: control frames (`ack`, `err`, `hello`)
-   * are conversation-scoped and are never replayed.
+   * Event frames are stamped with a monotonic `seq` and buffered, so a device can
+   * resume from where it left off. Control frames are conversation-scoped and are
+   * never buffered.
    */
-  private stampSeq(raw: string): string | null {
+  private prepare(raw: string): { data: string; buffered: boolean } | null {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -363,20 +371,23 @@ export class RelaySession {
     }
     if (typeof parsed !== 'object' || parsed === null) return null;
     const frame = parsed as Record<string, unknown>;
-    if (typeof frame.type !== 'string' || !frame.type.startsWith('evt.')) {
-      // Non-event frames from the bridge are forwarded as-is without a sequence number.
-      return raw;
+    if (typeof frame.type !== 'string') return null;
+    if (!frame.type.startsWith('evt.')) {
+      // The bridge should not set `seq`; if it does, the relay's number wins.
+      return { data: raw, buffered: false };
     }
     this.seq += 1;
     if ('seq' in frame) {
-      // The bridge should not set `seq`; if it does, the relay's number wins.
       frame.seq = this.seq;
-      return JSON.stringify(frame);
+      return { data: JSON.stringify(frame), buffered: true };
     }
     // The sequence number is injected into the original text rather than
     // re-serialising the parsed object: re-serialising would round 64-bit integers,
     // and the relay's job is to route frames, not to interpret them.
-    return raw.replace(/^(\s*)\{/, `$1{"seq":${this.seq},`);
+    return {
+      data: raw.replace(/^(\s*)\{/, `$1{"seq":${this.seq},`),
+      buffered: true,
+    };
   }
 
   private sendToBridge(raw: string): void {

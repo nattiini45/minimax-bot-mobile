@@ -306,6 +306,41 @@ describe('frame routing', () => {
     expect(result.replay.entries.map((entry) => entry.seq)).toEqual([2, 3]);
   });
 
+  it('does not replay control frames to a device that never sent them', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+
+    const bridgeSocket = new FakeSocket();
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
+
+    // An `ack` answers one request and an `err` reports one failure. Both are
+    // conversation-scoped: replaying them would hand a resuming device the answer to a
+    // request it never made, and a stale `err` would look like a fresh failure.
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'ack', source: 'bridge', payload: { opId: 'op-old' } }));
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f2', ts: 2, type: 'err', source: 'bridge', payload: { opId: 'op-old', code: 'X' } }));
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f3', ts: 3, type: 'evt.team_snapshot', source: 'bridge', payload: {} }));
+
+    const resumed = new FakeSocket();
+    const result = await session.registerSocket({
+      id: 'd2',
+      role: 'device',
+      subject: 'device-1',
+      token: paired.deviceToken!,
+      socket: resumed,
+      lastSeq: 0,
+    });
+
+    if (!result.ok) throw new Error(`expected the device to be accepted: ${result.reason}`);
+    // Only the event is replayed. The `ack` and the `err` answered requests this device
+    // never made, so they are not in the buffer it resumes from.
+    expect(result.replay.entries.map((entry) => entry.seq)).toEqual([1]);
+    expect(result.replay.entries.map((entry) => JSON.parse(entry.data).type)).toEqual([
+      'evt.team_snapshot',
+    ]);
+  });
+
   it('flags truncation when a resuming device fell behind the buffer', async () => {
     const session = makeSession({ ringCapacity: 4 });
     const paired = await pair(session, 'device-1');
