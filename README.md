@@ -120,6 +120,34 @@ npx wrangler deploy
 The Durable Object class must be exported from the Worker entrypoint
 (`export { Relay } from './relay.js';`) or Wrangler cannot bind it.
 
+### Put the relay on the public internet
+
+The relay is a plain Worker, so `npx wrangler deploy` gives every phone one
+address to reach — `https://<worker>.<subdomain>.workers.dev`. Two things make
+that safe to publish:
+
+- **Every route is authenticated.** `/status` is open and says only that the
+  relay is up. Everything else needs a bearer token or a one-time pairing code;
+  there is no cookie and no session to steal.
+- **Guessing a pairing code is rate limited.** Ten wrong codes lock the endpoint
+  for a minute, a code lives for ninety seconds, and it is consumed on use. An
+  account belongs to one bridge: a second bridge cannot claim it.
+
+Point the bridge at the deployed worker, mint a bridge token for it, and give
+the phone the worker address:
+
+```bash
+npm run mint:token -- --secret <RELAY_SECRET> --bridge-id <id> --bridge-name <name>
+```
+
+The client can ship with the relay address already filled in. Expo inlines
+`EXPO_PUBLIC_RELAY_URL` at build time, and the field stays editable, so a
+self-hosted relay is still one tap away:
+
+```bash
+EXPO_PUBLIC_RELAY_URL=https://<worker>.<subdomain>.workers.dev npm run export:web
+```
+
 ### Run the bridge
 
 The bridge is a Mini App plugin. Build it, then install `packages/bridge` as a
