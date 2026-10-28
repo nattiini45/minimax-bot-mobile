@@ -289,10 +289,24 @@
       const $ = (id) => document.getElementById(id);
       let timer = null;
 
+      /**
+       * The bridge's per-process secret.
+       *
+       * It proves a mutating request came from this surface: a page in the user's
+       * browser can reach the bridge over loopback, but it cannot read this
+       * response (the bridge sends no CORS headers), so it can never obtain the
+       * secret and can never redirect the bridge at a relay of its own.
+       */
+      let secret = null;
+
       async function api(path, options) {
+        if (!secret) {
+          const handshake = await fetch('/api/session', { credentials: 'same-origin' });
+          secret = (await handshake.json()).secret;
+        }
         const response = await fetch(path, {
           credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-bridge-secret': secret },
           ...options,
         });
         const body = await response.json().catch(() => ({}));

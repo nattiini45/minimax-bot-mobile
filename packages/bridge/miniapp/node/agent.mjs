@@ -41,10 +41,10 @@ export class AgentRunner {
    */
   async run(input) {
     if (!this.context.agent) {
-      throw new Error('AGENT_UNAVAILABLE');
+      throw codedError('AGENT_UNAVAILABLE', 'The desktop is not running an agent right now.', true);
     }
     if (this.activeRuns >= MAX_CONCURRENT_RUNS) {
-      throw new Error('BUSY');
+      throw codedError('BUSY', 'Too many turns are already running.', true);
     }
 
     const { chatId, text } = input;
@@ -56,6 +56,7 @@ export class AgentRunner {
     const onEvent = (event) => this.handleAgentEvent(chatId, event, controller);
 
     let result;
+    let failure;
     try {
       result = await this.context.agent.run(
         sessionId ? { text, sessionId } : { text },
@@ -81,20 +82,44 @@ export class AgentRunner {
       }
 
       return result;
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
       this.activeRuns -= 1;
       for (const [turnId, active] of this.aborts) {
         if (active === controller) this.aborts.delete(turnId);
       }
-      this.onTurnFinished?.({ chatId, durationMs: Date.now() - startedAt, result });
+      // A turn that failed still has to be reported, or the phone is left waiting on a
+      // reply that will never come.
+      if (failure) {
+        this.onEvent('evt.turn_finished', {
+          chatId,
+          turnId: result?.turnId,
+          status: 'error',
+          reason: failure instanceof Error ? failure.message : String(failure),
+          error: failure instanceof Error ? failure.message : String(failure),
+        });
+      }
+      this.onTurnFinished?.({
+        chatId,
+        durationMs: Date.now() - startedAt,
+        result,
+        error: failure,
+      });
     }
   }
 
   /** Answers a pending permission request. */
   async reply(requestId, decision) {
+    // The agent API accepts exactly two decisions. Anything else — including
+    // `allowAlways` — is refused here rather than forwarded to the Host.
+    if (decision !== 'allowOnce' && decision !== 'deny') {
+      throw codedError('INVALID_ARGUMENTS', 'A decision must be either allowOnce or deny.', false);
+    }
     const item = this.pending?.get(requestId);
     if (!item || item.kind !== 'permission') {
-      throw new Error('REQUEST_NOT_FOUND');
+      throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
     await this.context.agent.reply({
       sessionId: item.sessionId,
@@ -109,7 +134,7 @@ export class AgentRunner {
   async answer(requestId, answers) {
     const item = this.pending?.get(requestId);
     if (!item || item.kind !== 'question') {
-      throw new Error('REQUEST_NOT_FOUND');
+      throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
     const chatId = this.chatIdForSession(item.sessionId);
     const controller = new AbortController();
@@ -235,4 +260,17 @@ export function messageIdFor(chatId, turnId) {
 
 export function authorIdFor(chatId) {
   return chatId.startsWith('bot:') ? chatId.slice(4) : undefined;
+}
+
+/**
+ * Builds an error that carries the protocol's error code.
+ *
+ * @param {string} code
+ * @param {string} message
+ * @param {boolean} [retryable]
+ * @returns {Error & {code: string, retryable: boolean}}
+ */
+function codedError(code, message, retryable = false) {
+  const error = new Error(message);
+  return Object.assign(error, { code, retryable });
 }

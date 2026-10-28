@@ -175,6 +175,35 @@ test('send_message mentions are prefixed to the prompt', async () => {
   await dispose();
 });
 
+test('send_message keeps the id the phone chose, so the bubble is replaced in place', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
+  const result = /** @type {SendResult} */ (
+    await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi there', clientMessageId: 'local_abc' })
+  );
+
+  assert.equal(result.messageId, 'local_abc');
+  const committed = sent.find(
+    (frame) => frame.type === 'evt.message_committed' && frame.payload.message.role === 'user',
+  );
+  assert.equal(committed.payload.message.messageId, 'local_abc');
+  await dispose();
+});
+
+test('send_message ignores an id the phone may not choose', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
+  const result = /** @type {SendResult} */ (
+    await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi', clientMessageId: 'has space' })
+  );
+
+  assert.notEqual(result.messageId, 'has space');
+  assert.ok(result.messageId.startsWith('msg_'));
+  const committed = sent.find(
+    (frame) => frame.type === 'evt.message_committed' && frame.payload.message.role === 'user',
+  );
+  assert.equal(committed.payload.message.messageId, result.messageId);
+  await dispose();
+});
+
 test('a streamed reply is published as chunks and a commit', async () => {
   const { bridge, sent, dispose } = await makeBridge();
   await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });

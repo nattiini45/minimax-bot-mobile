@@ -11,7 +11,7 @@ import { Ledger } from './ledger.mjs';
 import { PendingSet } from './pending.mjs';
 import { RelayClient } from './relay-client.mjs';
 import { OP_TOOL, ToolGateway } from './tools.mjs';
-import { createFrame, newId } from './protocol/index.js';
+import { createFrame, isValidClientMessageId, newId } from './protocol/index.js';
 
 const OP_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const HISTORY_LIMIT = 200;
@@ -60,9 +60,8 @@ export class Bridge {
     this.history = new Map();
     /** @type {Map<string, Map<string, number>>} messageId -> emoji -> count */
     this.reactions = new Map();
-    /** @type {Map<string, {result: unknown, expiresAt: number}>} */
-    this.opCache = new Map();
-    this.linkedAt = Date.now();
+    /** @type {Map<string, {promise: Promise<{ok: boolean, value?: unknown, error?: unknown}>, expiresAt: number}>} */
+    this.opCache = new Map();    this.linkedAt = Date.now();
   }
 
   async start() {
@@ -86,7 +85,12 @@ export class Bridge {
     this.relay.send(createFrame({ type, payload, source: 'bridge' }));
   }
 
-  /** Re-emits held approvals and questions so a resuming phone sees them. */
+  /**
+   * Re-emits held approvals and questions so a resuming phone sees them.
+   *
+   * The team snapshot goes out with it: a phone that (re)connects has no roster of its
+   * own, and this is the one event that carries the whole team.
+   */
   replayPending() {
     for (const item of this.pending.list()) {
       if (item.kind === 'permission') {
@@ -101,6 +105,23 @@ export class Bridge {
       teamToolsAvailable: this.tools.available,
       linkedAt: this.linkedAt,
     });
+    void this.publishTeamSnapshot();
+  }
+
+  /** Publishes the current team roster to the phones. */
+  async publishTeamSnapshot() {
+    try {
+      const team = await this.readTeam();
+      this.emit('evt.team_snapshot', {
+        ...team,
+        diagnostics: this.diagnostics(),
+        tools: this.tools.catalog,
+      });
+    } catch (error) {
+      this.logger.warn('team snapshot failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // -- inbound -------------------------------------------------------------
@@ -110,20 +131,37 @@ export class Bridge {
     if (!frame.type.startsWith('op.')) return;
 
     const opId = frame.opId ?? frame.id;
+    // The cache key includes the operation type: two different operations must never
+    // share a result, even if they arrive with the same opId.
+    const cacheKey = `${frame.type}:${opId}`;
 
-    const cached = this.opCache.get(opId);
+    const cached = this.opCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
-      this.reply(frame, cached.result);
+      // The in-flight promise is shared, so a duplicate that arrives while the first
+      // call is still running waits for it instead of running the operation twice.
+      const outcome = await cached.promise;
+      if (outcome.ok) {
+        this.reply(frame, outcome.value);
+      } else {
+        this.replyError(frame, outcome.error);
+      }
       return;
     }
 
-    try {
-      const result = await this.dispatch(frame.type, frame.payload ?? {});
-      this.opCache.set(opId, { result, expiresAt: Date.now() + OP_DEDUPE_TTL_MS });
-      this.pruneCache();
-      this.reply(frame, result);
-    } catch (error) {
-      this.replyError(frame, error);
+    // Claim the slot before awaiting, so a concurrent duplicate cannot slip past.
+    /** @type {Promise<{ok: boolean, value?: unknown, error?: unknown}>} */
+    const promise = this.dispatch(frame.type, frame.payload ?? {}).then(
+      (value) => ({ ok: true, value }),
+      (error) => ({ ok: false, error }),
+    );
+    this.opCache.set(cacheKey, { promise, expiresAt: Date.now() + OP_DEDUPE_TTL_MS });
+    this.pruneCache();
+
+    const outcome = await promise;
+    if (outcome.ok) {
+      this.reply(frame, outcome.value);
+    } else {
+      this.replyError(frame, outcome.error);
     }
   }
 
@@ -149,6 +187,9 @@ export class Bridge {
           code,
           message: error instanceof Error ? error.message : String(error),
           retryable,
+          // `INVALID_ARGUMENTS` carries the tool's live schema and the properties that
+          // are missing, so the client can ask for the exact field instead of guessing.
+          ...(error && error.details ? { details: error.details } : {}),
         },
         source: 'bridge',
         in_reply_to: frame.id,
@@ -193,8 +234,44 @@ export class Bridge {
         if (!toolName) {
           throw codedError('UNKNOWN_OP', `No handler for ${type}`);
         }
-        return this.callTool(toolName, payload);
+        const result = await this.callTool(toolName, payload);
+        await this.publishMutation(type, result);
+        return result;
       }
+    }
+  }
+
+  /**
+   * Publishes the event that carries a mutation's result to the phones.
+   *
+   * The phone never polls for these: it renders what the bridge tells it. A mutation
+   * that is not published leaves the phone's list stale until the next full refresh.
+   */
+  async publishMutation(type, result) {
+    const data = result?.data && typeof result.data === 'object' ? result.data : {};
+    switch (type) {
+      case 'op.create_bot':
+      case 'op.update_bot':
+      case 'op.delete_bot':
+      case 'op.create_group':
+      case 'op.update_group':
+      case 'op.delete_group':
+        await this.publishTeamSnapshot();
+        return;
+      case 'op.dispatch':
+      case 'op.cancel_task':
+        this.emit('evt.task_updated', { task: data.task ?? data });
+        return;
+      case 'op.start_helper':
+      case 'op.stop_helper':
+        this.emit('evt.helper_updated', { helper: data.helper ?? data });
+        return;
+      case 'op.create_schedule':
+      case 'op.delete_schedule':
+        this.emit('evt.schedule_updated', { schedule: data.schedule ?? data });
+        return;
+      default:
+        return;
     }
   }
 
@@ -203,7 +280,9 @@ export class Bridge {
    *
    * The tool envelope differs per tool, so the raw result is returned alongside a best
    * effort structured view; the client renders the structured view and falls back to the
-   * raw content when it cannot.
+   * raw content when it cannot. The tool's own fields are also spread at the top level,
+   * so the protocol's declared result shapes (`entries`, `tasks`, `bots`, …) are present
+   * exactly where the client reads them.
    */
   async callTool(toolName, payload) {
     const startedAt = Date.now();
@@ -214,21 +293,30 @@ export class Bridge {
       ok: result.ok === true && result.isError !== true,
       durationMs: Date.now() - startedAt,
       tokens: extractTokens(result),
+      error: result.ok === true && result.isError !== true ? undefined : true,
     });
-    await this.ledger.persist();
 
     if (!result.ok) {
-      throw codedError(result.code ?? 'TOOL_FAILED', `The ${toolName} tool did not complete.`, false);
+      throw codedError(
+        result.code ?? 'TOOL_FAILED',
+        result.message ?? `The ${toolName} tool did not complete.`,
+        false,
+        result.details,
+      );
     }
     if (result.isError === true) {
       throw codedError('TOOL_REPORTED_ERROR', 'The team tool reported an error.', false);
     }
 
+    await this.ledger.persist();
+
+    const data = extractData(result);
     return {
       tool: toolName,
       content: result.content,
       structuredContent: result.structuredContent,
-      data: extractData(result),
+      data,
+      ...(data && typeof data === 'object' && !Array.isArray(data) ? data : {}),
     };
   }
 
@@ -259,8 +347,13 @@ export class Bridge {
       throw codedError('INVALID_ARGUMENTS', 'chatId and text are required.');
     }
 
+    // The client may choose the id so its optimistic bubble can be replaced in place
+    // when this message is committed. An id the client may not choose is ignored.
+    const messageId = isValidClientMessageId(payload.clientMessageId)
+      ? payload.clientMessageId
+      : `msg_${newId('u')}`;
     const userMessage = {
-      messageId: `msg_${newId('u')}`,
+      messageId,
       chatId,
       role: 'user',
       text,
@@ -331,11 +424,12 @@ export class Bridge {
  * @param {string} code
  * @param {string} message
  * @param {boolean} [retryable]
- * @returns {Error & {code: string, retryable: boolean}}
+ * @param {unknown} [details] extra context, e.g. the tool's live schema
+ * @returns {Error & {code: string, retryable: boolean, details?: unknown}}
  */
-function codedError(code, message, retryable = false) {
+function codedError(code, message, retryable = false, details) {
   const error = new Error(message);
-  return Object.assign(error, { code, retryable });
+  return Object.assign(error, { code, retryable, ...(details ? { details } : {}) });
 }
 
 /** Pulls a JSON object out of a tool result, whatever envelope it arrived in. */

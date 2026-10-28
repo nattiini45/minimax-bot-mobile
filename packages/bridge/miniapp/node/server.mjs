@@ -7,6 +7,7 @@
  */
 
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 
 import { Bridge } from './bridge.mjs';
 import { loadConfig, saveConfig } from './config.mjs';
@@ -20,8 +21,16 @@ export async function start(context) {
   const bridge = new Bridge(context, { config, logger });
   await bridge.start();
 
+  /**
+   * The secret that proves a mutating request came from the desktop surface.
+   *
+   * It is handed out by `GET /api/session`, which a cross-site caller can call but
+   * not read, and it is regenerated every time the bridge starts.
+   */
+  const secret = randomBytes(32).toString('hex');
+
   const server = createServer((request, response) => {
-    handle(request, response, { bridge, context, getConfig: () => config, setConfig: async (next) => {
+    handle(request, response, { bridge, context, secret, getConfig: () => config, setConfig: async (next) => {
       config = next;
       await saveConfig(context.dataDir, next);
       bridge.config = next;
@@ -64,8 +73,24 @@ async function handle(request, response, deps) {
   const url = new URL(request.url, 'http://127.0.0.1');
   const path = url.pathname;
 
+  // Everything that can change state is restricted to the desktop surface.
+  //
+  // The bridge binds loopback, so a page in the user's browser can still reach it.
+  // `POST /api/config` in particular can point the bridge at another relay, which
+  // would hand that relay the bridge token and every frame that follows — so a
+  // request from a page the user did not open must never be honoured.
+  if (request.method !== 'GET' && !isTrustedRequest(request, deps)) {
+    return json(response, 403, { error: 'forbidden', message: 'This request did not come from the bridge surface.' });
+  }
+
   if (request.method === 'GET' && path === '/api/health') {
     return json(response, 200, { ok: true });
+  }
+
+  if (request.method === 'GET' && path === '/api/session') {
+    // Same-origin only: the bridge sends no CORS headers, so a cross-site caller can
+    // request this but cannot read the answer.
+    return json(response, 200, { secret: deps.secret });
   }
 
   if (request.method === 'GET' && path === '/api/status') {
@@ -103,7 +128,12 @@ async function handle(request, response, deps) {
 
   if (request.method === 'DELETE' && path.startsWith('/api/devices/')) {
     const { bridge } = deps;
-    const deviceId = decodeURIComponent(path.slice('/api/devices/'.length));
+    let deviceId;
+    try {
+      deviceId = decodeURIComponent(path.slice('/api/devices/'.length));
+    } catch {
+      return json(response, 400, { error: 'bad_request', message: 'Malformed device id.' });
+    }
     const revoked = await bridge.relay.revokeDevice(deviceId);
     return json(response, revoked ? 200 : 404, { revoked });
   }
@@ -120,6 +150,9 @@ async function handle(request, response, deps) {
 
   if (request.method === 'POST' && path === '/api/config') {
     const body = await readJson(request);
+    if (body === null) {
+      return json(response, 413, { error: 'too_large', message: 'The request body is too large.' });
+    }
     const { getConfig, setConfig } = deps;
     const current = getConfig();
     const next = {
@@ -135,6 +168,31 @@ async function handle(request, response, deps) {
   return json(response, 404, { error: 'not_found' });
 }
 
+/**
+ * Whether a mutating request came from the bridge's own desktop surface.
+ *
+ * The bridge binds loopback, so a page in the user's browser can still reach it —
+ * `POST /api/config` in particular can point the bridge at another relay, which
+ * would hand that relay the bridge token and every frame that follows. Two
+ * independent checks, because either alone is bypassable:
+ *
+ * - The body must be `application/json`. That content type is not CORS-safelisted,
+ *   so a cross-site request from a page the user opened always triggers a preflight,
+ *   and the bridge answers no preflight — the browser blocks the request outright.
+ * - The request must carry the per-process secret. The secret is handed out by
+ *   `GET /api/session`, which a cross-site caller can *call* but cannot *read*
+ *   (the bridge sends no CORS headers), so a hostile page can never obtain it.
+ */
+function isTrustedRequest(request, deps) {
+  const contentType = request.headers['content-type'] ?? '';
+  if (!contentType.toLowerCase().startsWith('application/json')) return false;
+
+  const presented = request.headers['x-bridge-secret'];
+  if (typeof presented !== 'string' || presented !== deps.secret) return false;
+
+  return true;
+}
+
 function json(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
@@ -145,13 +203,22 @@ function json(response, status, value) {
   response.end(body);
 }
 
+/**
+ * Reads a JSON body.
+ *
+ * Returns `null` when the body is too large, so the caller can answer 413 instead
+ * of silently treating an oversized body as an empty one.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
 async function readJson(request) {
   try {
     const chunks = [];
     let size = 0;
     for await (const chunk of request) {
       size += chunk.length;
-      if (size > MAX_BODY) throw new Error('body too large');
+      if (size > MAX_BODY) return null;
       chunks.push(chunk);
     }
     const text = Buffer.concat(chunks).toString('utf8');
