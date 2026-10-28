@@ -51,6 +51,11 @@ export default function ChatScreen() {
 
   const [draft, setDraft] = useState('');
   const [reactingTo, setReactingTo] = useState<string | null>(null);
+  // The picker belongs to the message it was opened on. Moving to another chat must
+  // close it, or the next reaction would be sent to the wrong conversation.
+  useEffect(() => {
+    setReactingTo(null);
+  }, [chatId]);
   const listRef = useRef<FlatList<AppMessage>>(null);
   const lastCount = useRef(0);
 

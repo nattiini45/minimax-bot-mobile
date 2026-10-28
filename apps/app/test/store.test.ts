@@ -22,6 +22,7 @@ function reset() {
     activeTurn: {},
     reactions: {},
     tasks: [],
+    tasksNote: null,
     helpers: [],
     schedules: [],
     approvals: [],
@@ -270,19 +271,20 @@ describe('the live trace', () => {
     const store = useAppStore.getState();
     store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
     store.applyFrame(
-      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', toolInput: 'ls' }),
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_1' }),
     );
 
     let entry = useAppStore.getState().activity['bot:b1']?.[0];
     expect(entry?.toolName).toBe('bash');
     expect(entry?.status).toBe('running');
-    expect(entry?.toolInput).toBe('ls');
+    expect(entry?.id).toBe('call_1');
 
     store.applyFrame(
       event('evt.tool_finished', {
         chatId: 'bot:b1',
         turnId: 't1',
         toolName: 'bash',
+        callId: 'call_1',
         ok: true,
         usage: { durationMs: 489 },
       }),
@@ -295,12 +297,15 @@ describe('the live trace', () => {
 
   it('marks a failed tool as failed and keeps the reason', () => {
     const store = useAppStore.getState();
-    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_1' }),
+    );
     store.applyFrame(
       event('evt.tool_finished', {
         chatId: 'bot:b1',
         turnId: 't1',
         toolName: 'bash',
+        callId: 'call_1',
         ok: false,
         error: 'permission denied',
       }),
@@ -311,18 +316,80 @@ describe('the live trace', () => {
     expect(entry?.error).toBe('permission denied');
   });
 
-  it('closes the newest open call when a tool runs twice in one turn', () => {
+  it('closes the call the finish names, not the newest one', () => {
     const store = useAppStore.getState();
-    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
-    store.applyFrame(event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash' }));
     store.applyFrame(
-      event('evt.tool_finished', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', ok: true }),
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_1' }),
+    );
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_2' }),
+    );
+    // The first call is the one that reports back.
+    store.applyFrame(
+      event('evt.tool_finished', {
+        chatId: 'bot:b1',
+        turnId: 't1',
+        toolName: 'bash',
+        callId: 'call_1',
+        ok: true,
+        usage: { durationMs: 100 },
+      }),
     );
 
     const list = useAppStore.getState().activity['bot:b1'] ?? [];
-    expect(list).toHaveLength(2);
-    expect(list[0]?.status).toBe('running');
-    expect(list[1]?.status).toBe('ok');
+    expect(list[0]?.status).toBe('ok');
+    expect(list[0]?.durationMs).toBe(100);
+    expect(list[1]?.status).toBe('running');
+  });
+
+  it('gives every call an id of its own', () => {
+    const store = useAppStore.getState();
+    for (let i = 0; i < 45; i += 1) {
+      store.applyFrame(
+        event('evt.tool_started', {
+          chatId: 'bot:b1',
+          turnId: 't1',
+          toolName: 'bash',
+          callId: `call_${i}`,
+        }),
+      );
+    }
+
+    const list = useAppStore.getState().activity['bot:b1'] ?? [];
+    const ids = list.map((entry) => entry.id);
+    // Duplicate ids would be duplicate React keys in the rail.
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('keeps a running call when the list is trimmed', () => {
+    const store = useAppStore.getState();
+    for (let i = 0; i < 45; i += 1) {
+      store.applyFrame(
+        event('evt.tool_started', {
+          chatId: 'bot:b1',
+          turnId: 't1',
+          toolName: 'bash',
+          callId: `call_${i}`,
+        }),
+      );
+      store.applyFrame(
+        event('evt.tool_finished', {
+          chatId: 'bot:b1',
+          turnId: 't1',
+          toolName: 'bash',
+          callId: `call_${i}`,
+          ok: true,
+        }),
+      );
+    }
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_run' }),
+    );
+
+    const list = useAppStore.getState().activity['bot:b1'] ?? [];
+    expect(list.length).toBeLessThanOrEqual(40);
+    // The call that is still running is the truth about the team, so it is kept.
+    expect(list.some((entry) => entry.id === 'call_run')).toBe(true);
   });
 
   it('forgets the running turn when it finishes', () => {
@@ -331,6 +398,52 @@ describe('the live trace', () => {
     store.applyFrame(event('evt.turn_finished', { chatId: 'bot:b1', turnId: 't1', status: 'finished' }));
 
     expect(useAppStore.getState().activeTurn['bot:b1']).toBeUndefined();
+  });
+
+  it('keeps the new turn when an older one finishes late', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't2' }));
+    // The desktop can start the next turn before the previous one reports.
+    store.applyFrame(event('evt.turn_finished', { chatId: 'bot:b1', turnId: 't1', status: 'finished' }));
+
+    expect(useAppStore.getState().activeTurn['bot:b1']).toBe('t2');
+  });
+
+  it('closes a tool that never reported back when the turn ends', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_1' }),
+    );
+    store.applyFrame(event('evt.turn_finished', { chatId: 'bot:b1', turnId: 't1', status: 'aborted' }));
+
+    const entry = useAppStore.getState().activity['bot:b1']?.[0];
+    // A call left running would keep the rail claiming that the team is working.
+    expect(entry?.status).toBe('failed');
+  });
+
+  it('leaves another chat alone', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b2', turnId: 't2' }));
+    store.applyFrame(event('evt.turn_finished', { chatId: 'bot:b1', turnId: 't1', status: 'finished' }));
+
+    expect(useAppStore.getState().activeTurn['bot:b2']).toBe('t2');
+  });
+
+  it('drops the trace when the relay says it lost frames', () => {
+    const store = useAppStore.getState();
+    store.applyFrame(event('evt.turn_started', { chatId: 'bot:b1', turnId: 't1' }));
+    store.applyFrame(
+      event('evt.tool_started', { chatId: 'bot:b1', turnId: 't1', toolName: 'bash', callId: 'call_1' }),
+    );
+    store.applyFrame(
+      createFrame({ type: 'hello.ok', payload: { bridgeOnline: true, truncated: true }, source: 'relay' }),
+    );
+
+    expect(useAppStore.getState().activeTurn['bot:b1']).toBeUndefined();
+    expect(useAppStore.getState().activity['bot:b1']).toBeUndefined();
   });
 });
 
@@ -353,6 +466,36 @@ describe('reactions', () => {
     store.applyFrame(event('evt.reaction_added', { reaction: { messageId: 'm1', emoji: '🎉' } }));
 
     expect(useAppStore.getState().reactions['m1']).toHaveLength(2);
+  });
+
+  it('asks the desktop, so the count is the desktop’s', () => {
+    const request = jest.spyOn(useAppStore.getState(), 'request').mockReturnValue('op-1');
+    useAppStore.getState().react('m1', '🔥');
+    expect(request).toHaveBeenCalledWith('op.react', { messageId: 'm1', emoji: '🔥' });
+    request.mockRestore();
+  });
+
+  it('reads the counts the desktop owns when the thread is loaded', () => {
+    // `requestAsync` is the path a screen uses: it registers the operation and the
+    // payload the answer is applied to, which is what the ack carries back.
+    const pending = useAppStore.getState().requestAsync('op.list_history', { chatId: 'bot:b1' });
+    const opId = Object.keys(useAppStore.getState().pendingOp)[0]!;
+    useAppStore.getState().applyFrame(
+      createFrame({
+        type: 'ack',
+        payload: {
+          opId,
+          result: {
+            messages: [{ messageId: 'm1', chatId: 'bot:b1', role: 'assistant', text: 'hi', ts: 1 }],
+            reactions: [{ messageId: 'm1', emoji: '👍', count: 3 }],
+          },
+        },
+        source: 'relay',
+      }),
+    );
+    void pending;
+
+    expect(useAppStore.getState().reactions['m1']?.[0]?.count).toBe(3);
   });
 });
 

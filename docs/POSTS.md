@@ -35,6 +35,12 @@ a stale workspace package and the app crashed on launch. It also found that the 
 discarding the tool-call events the bridge already sent, and wired them up so a reply shows
 its work: "tool_search · 15ms", "mcp_invoke · 20ms".
 
+Then I had three independent reviewers read the code with fresh eyes, having never seen how it
+was written. They found six more defects that would have shipped — among them a regression
+test that passed against the very code it was meant to catch, and a tool trace that measured
+the wrong call whenever the same tool ran twice in a turn. 181 tests pass now, and the new
+ones were written to fail against broken code.
+
 Creation note: {{REPO}}/blob/main/docs/CREATION-NOTE.md
 ```
 
@@ -92,10 +98,17 @@ part I would not have predicted:
   protocol package never arrived. It needed a whole-workspace sync, an always-on expo
   prebuild, and a Gradle input declaration so the bundle task tracks the workspace.
 
+And then I did the thing I should have done first: I had three independent reviewers read
+the code with fresh eyes, having never seen how it was written. They found six more defects
+that would have shipped — including a regression test that passed against the very code it
+was meant to catch, because it sent its frames in an order where the bug could not fire.
+One of them rebuilt the pre-fix code in a sandbox to prove it; another transpiled the real
+store and drove it through eight frame orderings. Both found things I had read past.
+
 All of it was built with M3.1 Flash in MiniMax Code. The full story, including the limits I
 did not fix, is here: {{REPO}}/blob/main/docs/CREATION-NOTE.md
 
-168 tests pass across the four packages, and the end-to-end run is against a live team — real
+181 tests pass across the four packages, and the end-to-end run is against a live team — real
 pairing code, real streamed reply, real dispatched task, real memory entries.
 
 Questions welcome. Especially about the relay design and the build pipeline.
@@ -120,6 +133,10 @@ Wiring them up turns a reply from a long silence into a live trace:
 
   tool_search · 15ms
   mcp_invoke · 20ms
+
+Then I had three independent reviewers read the code with fresh eyes. They found six more
+defects that would have shipped — including a regression test that passed against the very
+code it was meant to catch.
 
 Live app: {{LIVE_APP}}
 Source: {{REPO}}

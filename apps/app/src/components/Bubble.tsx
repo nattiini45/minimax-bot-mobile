@@ -46,6 +46,16 @@ export function Bubble({
         disabled={!onLongPress}
         accessibilityRole={onLongPress ? 'button' : undefined}
         accessibilityLabel={onLongPress ? 'React to this message' : undefined}
+        // A long press is not reachable with a screen reader or a keyboard, so the same
+        // action is offered as an explicit one.
+        accessibilityActions={onLongPress ? [{ name: 'longpress', label: 'React' }] : undefined}
+        onAccessibilityAction={
+          onLongPress
+            ? (event) => {
+                if (event.nativeEvent.actionName === 'longpress') onLongPress();
+              }
+            : undefined
+        }
         style={[
           styles.bubble,
           {

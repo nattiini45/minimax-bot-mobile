@@ -315,12 +315,13 @@ describe('frame routing', () => {
     await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
-    // An `ack` answers one request and an `err` reports one failure. Both are
-    // conversation-scoped: replaying them would hand a resuming device the answer to a
-    // request it never made, and a stale `err` would look like a fresh failure.
-    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'ack', source: 'bridge', payload: { opId: 'op-old' } }));
-    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f2', ts: 2, type: 'err', source: 'bridge', payload: { opId: 'op-old', code: 'X' } }));
-    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f3', ts: 3, type: 'evt.team_snapshot', source: 'bridge', payload: {} }));
+    // The event comes FIRST on purpose. A control frame that arrives before any event
+    // would sit in the ring at sequence 0, and a resuming device filters sequence 0 out
+    // anyway — so the old code would pass this test. It is the control frame that
+    // arrives *after* an event that used to be replayed to a device that never asked.
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'evt.team_snapshot', source: 'bridge', payload: {} }));
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f2', ts: 2, type: 'ack', source: 'bridge', payload: { opId: 'op-old' } }));
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f3', ts: 3, type: 'err', source: 'bridge', payload: { opId: 'op-old', code: 'X' } }));
 
     const resumed = new FakeSocket();
     const result = await session.registerSocket({
@@ -339,6 +340,56 @@ describe('frame routing', () => {
     expect(result.replay.entries.map((entry) => JSON.parse(entry.data).type)).toEqual([
       'evt.team_snapshot',
     ]);
+  });
+
+  it('still delivers a control frame to the devices that are connected', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+
+    const bridgeSocket = new FakeSocket();
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
+
+    const deviceSocket = new FakeSocket();
+    await session.registerSocket({
+      id: 'd1',
+      role: 'device',
+      subject: 'device-1',
+      token: paired.deviceToken!,
+      socket: deviceSocket,
+    });
+
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'ack', source: 'bridge', payload: { opId: 'op-1' } }));
+
+    const delivered = deviceSocket.frames().map((frame) => frame.type);
+    expect(delivered).toEqual(['ack']);
+  });
+
+  it('drops a frame it cannot read instead of passing it on', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+
+    const bridgeSocket = new FakeSocket();
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
+
+    const deviceSocket = new FakeSocket();
+    await session.registerSocket({
+      id: 'd1',
+      role: 'device',
+      subject: 'device-1',
+      token: paired.deviceToken!,
+      socket: deviceSocket,
+    });
+
+    // A frame with no type, or a type that is not a string, would make the client throw
+    // when it reads `frame.type`. It is dropped instead of being passed on.
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, source: 'bridge', payload: {} }));
+    session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f2', ts: 2, type: 42, source: 'bridge', payload: {} }));
+
+    expect(deviceSocket.frames()).toEqual([]);
   });
 
   it('flags truncation when a resuming device fell behind the buffer', async () => {

@@ -54,6 +54,49 @@ process instead of a long silence. That trace only exists because the protocol a
 those events and the client was throwing them away; M3.1 Flash noticed the waste while
 recording a demo session, and wired it up.
 
+## Then something reviewed it that had not written it
+
+The code above was **verified against the live system**, and that is exactly why it needed a
+review: everything it did wrong was in the code it had already "verified". So three
+independent reviewers read it with fresh eyes and no history of how it was written.
+
+They found **six defects that would have shipped**, and two tests that would have passed
+against the very code they were written to catch.
+
+The sharpest finding was a test that could not fail. The relay had a bug: a control frame
+that arrived *after* an event was replayed to a device that never sent the request, so a
+stale `err` looked like a failure that had just happened. The regression test sent its
+frames in the wrong order — the control frames first — and a control frame that arrives
+first lands in the ring at sequence 0, which a resuming device filters out anyway. **The
+pre-fix code passed the test.** The order was changed, and the difference is now explicit:
+
+```
+OLD (pre-fix)  ringSeqs=[1,1,1]  replayTypes=[evt.team_snapshot,ack,err]  entries=3
+NEW (fixed)    ringSeqs=[1]      replayTypes=[evt.team_snapshot]            entries=1
+```
+
+The other findings were the kind that only a careful reader finds:
+
+- The host reports a tool call **without its input** — it sends four fields and rejects a
+  fifth — so the field the trace carried could never exist, and the test that asserted it
+  was certifying a contract that could not hold.
+- The host emits one event per tool call and does not name two calls of the same tool
+  apart, so measuring them by name measured the wrong call. A real turn in this project
+  runs `bash` four times; every one of them now carries its own id and its own duration.
+- A turn that finished late cleared the *new* turn, so the phone stopped showing the work
+  in progress.
+- A tool that never reported back stayed "running" for ever, and the phone kept claiming
+  the team was working.
+
+Two of the reviewers were asked to prove their findings by running the code rather than
+reasoning about it: one rebuilt the pre-fix relay in a sandbox to show the test could not
+fail, and the other transpiled the real store and drove it through eight frame orderings.
+Both found things I had read past.
+
+**181 tests pass**, and the new ones were written to fail against broken code: the duration
+has to be a real measurement, the call ids have to be distinct, the history has to be in
+order.
+
 ## Honest limits
 
 - The relay keeps its state in memory, so a restart unpairs every phone. Both ends handle it.

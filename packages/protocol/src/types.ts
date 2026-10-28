@@ -602,13 +602,22 @@ export interface EvtToolStarted {
   chatId: string;
   turnId: string;
   toolName: string;
-  toolInput?: string;
+  /**
+   * Identifies this one call.
+   *
+   * The same tool can run twice in the same turn, and the host does not name the two
+   * calls apart, so the bridge numbers them. A finish carries the number of the call it
+   * belongs to, which is what lets a client match the two.
+   */
+  callId: string;
 }
 
 export interface EvtToolFinished {
   chatId: string;
   turnId: string;
   toolName: string;
+  /** The call this finish belongs to. */
+  callId: string;
   ok: boolean;
   /** Token usage reported by the tool receipt, when present. */
   usage?: { tokens?: number; durationMs?: number };

@@ -99,7 +99,27 @@ const TEAM_TOOLS = [
   { name: 'mcp__minimax-bot__list_schedules', server: 'minimax-bot', tool: 'list_schedules' },
 ];
 
-async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
+/**
+ * One event the fake desktop emits during a turn.
+ *
+ * @typedef {{type: string, name?: string, ok?: boolean, text?: string, status?: string}} AgentEvent
+ */
+
+/** The events the fake desktop emits during a turn, in the order it emits them. */
+/** @type {AgentEvent[]} */
+const DEFAULT_AGENT_SCRIPT = [
+  { type: 'turn.started' },
+  { type: 'tool.started', name: 'bash' },
+  { type: 'tool.finished', name: 'bash', ok: true },
+  { type: 'text.delta', text: 'Hello' },
+  { type: 'message.committed', text: 'Hello' },
+  { type: 'turn.finished', status: 'finished', text: 'Hello' },
+];
+
+/**
+ * @param {{tools?: typeof TEAM_TOOLS, agent?: boolean, agentScript?: AgentEvent[]}} options
+ */
+async function makeBridge({ tools = TEAM_TOOLS, agent = true, agentScript = DEFAULT_AGENT_SCRIPT } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'bridge-test-'));
   const sent = [];
   const toolCalls = [];
@@ -171,44 +191,14 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
     context.agent = {
       async run(input, options) {
         agentRuns.push(input);
-        options?.onEvent?.({
-          type: 'turn.started',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-        });
-        options?.onEvent?.({
-          type: 'tool.started',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-          name: 'bash',
-          input: 'ls -la',
-        });
-        options?.onEvent?.({
-          type: 'tool.finished',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-          name: 'bash',
-          ok: true,
-        });
-        options?.onEvent?.({
-          type: 'text.delta',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-          text: 'Hello',
-        });
-        options?.onEvent?.({
-          type: 'message.committed',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-          text: 'Hello',
-        });
-        options?.onEvent?.({
-          type: 'turn.finished',
-          sessionId: 'sess-1',
-          turnId: 'turn-1',
-          status: 'finished',
-          text: 'Hello',
-        });
+        for (const event of agentScript) {
+          options?.onEvent?.({ sessionId: 'sess-1', turnId: 'turn-1', ...event });
+          // The tool takes a moment, so the duration the bridge measures is a real
+          // measurement rather than zero.
+          if (event.type === 'tool.started') {
+            await new Promise((resolve) => setTimeout(resolve, 12));
+          }
+        }
         return { sessionId: 'sess-1', turnId: 'turn-1', status: 'finished', text: 'Hello' };
       },
       async reply(input) {
@@ -417,22 +407,73 @@ test('the conversation survives a reload, with the team replies in it', async ()
   await dispose();
 });
 
-test('every tool the team runs is published with how long it took', async () => {  const { bridge, sent, dispose } = await makeBridge();
+test('every tool the team runs is published with how long it took', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
   await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
 
   const started = sent.find((frame) => frame.type === 'evt.tool_started');
   assert.ok(started);
   assert.equal(started.payload.toolName, 'bash');
   assert.equal(started.payload.turnId, 'turn-1');
-  assert.equal(started.payload.toolInput, 'ls -la');
+  assert.equal(typeof started.payload.callId, 'string');
 
   const finished = sent.find((frame) => frame.type === 'evt.tool_finished');
   assert.ok(finished);
   assert.equal(finished.payload.toolName, 'bash');
   assert.equal(finished.payload.ok, true);
-  // The host does not report a duration, so the bridge times the call itself.
+  // The finish belongs to the call it started.
+  assert.equal(finished.payload.callId, started.payload.callId);
+  // The host does not report a duration, so the bridge times the call itself. The
+  // call really took time, so the number has to be more than zero.
   assert.equal(typeof finished.payload.usage.durationMs, 'number');
-  assert.ok(finished.payload.usage.durationMs >= 0);
+  assert.ok(finished.payload.usage.durationMs > 0);
+  await dispose();
+});
+
+test('two calls of the same tool in one turn are told apart', async () => {
+  const { bridge, sent, dispose } = await makeBridge({
+    agentScript: [
+      { type: 'turn.started' },
+      { type: 'tool.started', name: 'bash' },
+      { type: 'tool.started', name: 'bash' },
+      { type: 'tool.finished', name: 'bash', ok: true },
+      { type: 'tool.finished', name: 'bash', ok: true },
+      { type: 'turn.finished', status: 'finished' },
+    ],
+  });
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
+
+  const started = sent.filter((frame) => frame.type === 'evt.tool_started');
+  const finished = sent.filter((frame) => frame.type === 'evt.tool_finished');
+  assert.equal(started.length, 2);
+  assert.equal(finished.length, 2);
+  // The two calls have different ids, and each finish belongs to one of them.
+  assert.notEqual(started[0].payload.callId, started[1].payload.callId);
+  assert.equal(finished[0].payload.callId, started[0].payload.callId);
+  assert.equal(finished[1].payload.callId, started[1].payload.callId);
+  // Both durations were measured.
+  assert.ok(finished[0].payload.usage.durationMs > 0);
+  assert.ok(finished[1].payload.usage.durationMs > 0);
+  await dispose();
+});
+
+test('a tool that never reported back leaves nothing behind', async () => {
+  const { bridge, sent, dispose } = await makeBridge({
+    agentScript: [
+      { type: 'turn.started' },
+      { type: 'tool.started', name: 'bash' },
+      // The turn ends without the tool reporting.
+      { type: 'turn.finished', status: 'finished' },
+      // A late finish for that tool has no start to measure.
+      { type: 'tool.finished', name: 'bash', ok: true },
+    ],
+  });
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
+
+  const finished = sent.filter((frame) => frame.type === 'evt.tool_finished');
+  assert.equal(finished.length, 1);
+  // The bookkeeping was cleared with the turn, so there is no duration to report.
+  assert.equal(finished[0].payload.usage, undefined);
   await dispose();
 });
 
@@ -603,8 +644,27 @@ test('history accumulates the messages of a chat', async () => {
   const mine = history.messages.filter((message) => message.role === 'user');
   assert.equal(mine.length, 2);
   assert.equal(mine[0].text, 'one');
+  assert.equal(mine[1].text, 'two');
   // The team's replies are part of the thread as well.
   assert.ok(history.messages.some((message) => message.role === 'assistant'));
+  // The thread reads in the order it happened, which is the order the phone renders.
+  const times = history.messages.map((message) => message.ts);
+  assert.deepEqual(times, [...times].sort((a, b) => a - b));
+  await dispose();
+});
+
+test('the reactions of a chat come back with the thread', async () => {
+  const { bridge, dispose } = await makeBridge();
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'Hi' });
+  const history = /** @type {any} */ (await bridge.dispatch('op.list_history', { chatId: 'bot:b1' }));
+  const message = history.messages.find((/** @type {any} */ entry) => entry.role === 'assistant');
+
+  await bridge.dispatch('op.react', { messageId: message.messageId, emoji: '🔥' });
+  await bridge.dispatch('op.react', { messageId: message.messageId, emoji: '🔥' });
+
+  const reloaded = /** @type {any} */ (await bridge.dispatch('op.list_history', { chatId: 'bot:b1' }));
+  // The desktop owns the counts, so a phone that opens the chat later reads them here.
+  assert.deepEqual(reloaded.reactions, [{ messageId: message.messageId, emoji: '🔥', count: 2 }]);
   await dispose();
 });
 

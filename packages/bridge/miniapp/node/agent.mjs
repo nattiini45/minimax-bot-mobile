@@ -23,8 +23,16 @@ export class AgentRunner {
     this.sessions = new Map();
     /** @type {Map<string, AbortController>} turnId -> controller */
     this.aborts = new Map();
-    /** @type {Map<string, number>} `turnId:tool` -> the moment the tool started */
-    this.toolStarts = new Map();
+    /**
+     * The tool calls that are still running.
+     *
+     * @type {Map<string, {startedAt: number; callId: string}[]>} `turnId:tool` -> the calls,
+     *   oldest first. The host emits one event per call and does not name two calls of the
+     *   same tool apart, so the calls are queued and a finish takes the oldest one.
+     */
+    this.toolCalls = new Map();
+    /** @type {number} the bridge's own counter, used to name a call */
+    this.callCounter = 0;
     this.activeRuns = 0;
   }
 
@@ -34,6 +42,40 @@ export class AgentRunner {
 
   sessionFor(chatId) {
     return this.sessions.get(chatId);
+  }
+
+  /** Records the start of a tool call and gives it an id of its own. */
+  startTool(turnId, toolName) {
+    const key = toolKey(turnId, toolName);
+    const queue = this.toolCalls.get(key) ?? [];
+    const callId = `call_${(this.callCounter += 1)}`;
+    queue.push({ startedAt: Date.now(), callId });
+    this.toolCalls.set(key, queue);
+    return callId;
+  }
+
+  /**
+   * Takes the call a finish belongs to.
+   *
+   * Two calls of the same tool in one turn are indistinguishable by name, so the oldest
+   * unfinished call is the one that reports back. That is the call whose duration was
+   * measured, and the id it carries is the one the phone matches on.
+   */
+  finishTool(turnId, toolName) {
+    const key = toolKey(turnId, toolName);
+    const queue = this.toolCalls.get(key);
+    if (!queue || queue.length === 0) return undefined;
+    const call = queue.shift();
+    if (queue.length === 0) this.toolCalls.delete(key);
+    return call;
+  }
+
+  /** Forgets the calls of a turn, so a turn that ends badly leaves nothing behind. */
+  clearTools(turnId) {
+    if (turnId === undefined || turnId === null) return;
+    for (const key of [...this.toolCalls.keys()]) {
+      if (key.startsWith(`${turnId}:`)) this.toolCalls.delete(key);
+    }
   }
 
   /**
@@ -55,10 +97,16 @@ export class AgentRunner {
     this.activeRuns += 1;
     const startedAt = Date.now();
 
-    const onEvent = (event) => this.handleAgentEvent(chatId, event, controller);
+    const onEvent = (event) => {
+      // The turn id is only known from the events, and it is what the tool bookkeeping
+      // is keyed by, so it is remembered as the run goes.
+      if (event && typeof event.turnId === 'string') currentTurnId = event.turnId;
+      this.handleAgentEvent(chatId, event, controller);
+    };
 
     let result;
     let failure;
+    let currentTurnId;
     try {
       result = await this.context.agent.run(
         sessionId ? { text, sessionId } : { text },
@@ -103,6 +151,9 @@ export class AgentRunner {
           error: failure instanceof Error ? failure.message : String(failure),
         });
       }
+      // A turn that ended without a `turn.finished` — a steered run, an abort — would
+      // otherwise keep its unfinished tool calls for the rest of the session.
+      this.clearTools(currentTurnId);
       this.onTurnFinished?.({
         chatId,
         durationMs: Date.now() - startedAt,
@@ -194,28 +245,28 @@ export class AgentRunner {
         });
         break;
 
-      case 'tool.started':
-        this.toolStarts.set(toolKey(event.turnId, event.name), Date.now());
+      case 'tool.started': {
+        const callId = this.startTool(event.turnId, event.name);
         this.onEvent('evt.tool_started', {
           chatId,
           turnId: event.turnId,
           toolName: event.name,
-          ...(describeInput(event) === undefined ? {} : { toolInput: describeInput(event) }),
+          callId,
         });
         break;
+      }
 
       case 'tool.finished': {
-        const key = toolKey(event.turnId, event.name);
-        const startedAt = this.toolStarts.get(key);
-        this.toolStarts.delete(key);
-        // The host does not always report how long a tool took, so the bridge times it
-        // itself: the phone shows a real duration rather than a blank.
-        const reported = event.usage && typeof event.usage.durationMs === 'number' ? event.usage.durationMs : undefined;
-        const durationMs = startedAt === undefined ? reported : Date.now() - startedAt;
+        const call = this.finishTool(event.turnId, event.name);
+        // The host does not report how long a tool took, so the bridge times it itself:
+        // the phone shows a real duration rather than a blank.
+        const measured = call === undefined ? undefined : Date.now() - call.startedAt;
+        const durationMs = measured === undefined ? undefined : Math.max(0, measured);
         this.onEvent('evt.tool_finished', {
           chatId,
           turnId: event.turnId,
           toolName: event.name,
+          callId: call?.callId ?? `call_${(this.callCounter += 1)}`,
           ok: event.ok === true,
           ...(durationMs === undefined ? {} : { usage: { durationMs } }),
           ...(event.error ? { error: String(event.error) } : {}),
@@ -253,9 +304,7 @@ export class AgentRunner {
 
       case 'turn.finished':
         // A tool that never reported back would otherwise keep its start time forever.
-        for (const key of [...this.toolStarts.keys()]) {
-          if (key.startsWith(`${event.turnId ?? 'unknown'}:`)) this.toolStarts.delete(key);
-        }
+        this.clearTools(event.turnId);
         this.onEvent('evt.turn_finished', {
           chatId,
           turnId: event.turnId,
@@ -287,24 +336,6 @@ export function authorIdFor(chatId) {
  */
 function toolKey(turnId, toolName) {
   return `${turnId ?? 'unknown'}:${toolName ?? 'unknown'}`;
-}
-
-/**
- * Describes a tool call's input for the phone.
- *
- * The host is not consistent about the field it uses, so every known spelling is
- * accepted. An input that is not text is rendered as JSON, and an input that is
- * missing entirely is left out rather than shown as an empty string.
- */
-function describeInput(event) {
-  const raw = event.input ?? event.args ?? event.arguments ?? event.toolInput;
-  if (raw === undefined || raw === null) return undefined;
-  if (typeof raw === 'string') return raw.length > 0 ? raw : undefined;
-  try {
-    return JSON.stringify(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 /**

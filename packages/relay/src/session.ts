@@ -361,6 +361,10 @@ export class RelaySession {
    * Event frames are stamped with a monotonic `seq` and buffered, so a device can
    * resume from where it left off. Control frames are conversation-scoped and are
    * never buffered.
+   *
+   * A frame the relay cannot read is dropped. A frame with no type, or a type that is
+   * not a string, would make the client throw when it reads `frame.type`, so passing it
+   * on would break the device that received it.
    */
   private prepare(raw: string): { data: string; buffered: boolean } | null {
     let parsed: unknown;
@@ -373,11 +377,13 @@ export class RelaySession {
     const frame = parsed as Record<string, unknown>;
     if (typeof frame.type !== 'string') return null;
     if (!frame.type.startsWith('evt.')) {
-      // The bridge should not set `seq`; if it does, the relay's number wins.
+      // A control frame is forwarded exactly as it arrived: it is not sequenced, and
+      // the relay does not touch a number it does not own.
       return { data: raw, buffered: false };
     }
     this.seq += 1;
     if ('seq' in frame) {
+      // The bridge should not set `seq`; if it does, the relay's number wins.
       frame.seq = this.seq;
       return { data: JSON.stringify(frame), buffered: true };
     }
