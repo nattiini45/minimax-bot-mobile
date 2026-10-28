@@ -60,6 +60,11 @@ export class Relay {
     return this.session.listDevices();
   }
 
+  /** The bridge that owns this account, or null if no bridge has claimed it yet. */
+  ownerBridgeId(): string | null {
+    return this.session.ownerBridgeId;
+  }
+
   status() {
     return this.session.status();
   }
@@ -110,7 +115,12 @@ export class Relay {
       return new Response('unauthorized', { status: 401 });
     }
 
-    this.state.acceptWebSocket(server);
+    // The socket is accepted with `server.accept()` rather than
+    // `state.acceptWebSocket()`: the hibernation API lets the Durable Object be
+    // evicted while the socket is open, and every piece of this relay's state — the
+    // sequence counter, the replay ring, the device registry — lives in memory. An
+    // eviction would silently reset all of it and drop every frame.
+    server.accept();
     this.sockets.set(server, { peer });
 
     if (role === 'device') {

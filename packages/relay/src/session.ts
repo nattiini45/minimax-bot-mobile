@@ -7,7 +7,9 @@
  */
 
 import {
+  DEVICE_TOKEN_TTL_MS,
   PAIRING_CODE_TTL_MS,
+  generatePairingCode,
   type PairingResponse,
   type PeerRole,
 } from '@minimax-bot/protocol';
@@ -66,13 +68,26 @@ export interface SessionStatus {
 }
 
 const DEFAULT_RING_CAPACITY = 512;
-const DEFAULT_DEVICE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Wrong pairing codes allowed per window before the endpoint starts refusing. */
+const MAX_PAIR_ATTEMPTS = 10;
+const PAIR_BLOCK_MS = 60 * 1000;
 
 export class RelaySession {
   private readonly codes = new Map<string, PairingCodeRecord>();
   private readonly devices = new Map<string, DeviceRecord>();
   private readonly deviceSockets = new Map<string, PeerSocket>();
   private bridgeSocket: PeerSocket | null = null;
+  /**
+   * The bridge that owns this account.
+   *
+   * Set when the desktop asks for a pairing code. It is what binds a bridge token to
+   * an account, so a token minted for one desktop cannot manage another account's
+   * devices.
+   */
+  private bridgeId: string | null = null;
+  /** Wrong pairing guesses since the last success, and the block they trigger. */
+  private failedPairAttempts = 0;
+  private pairBlockedUntil = 0;
   private readonly ring: SeqRing;
   private seq = 0;
 
@@ -83,7 +98,7 @@ export class RelaySession {
   constructor(options: SessionOptions) {
     this.secret = options.secret;
     this.ring = new SeqRing(options.ringCapacity ?? DEFAULT_RING_CAPACITY);
-    this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEFAULT_DEVICE_TOKEN_TTL_MS;
+    this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEVICE_TOKEN_TTL_MS;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -92,10 +107,24 @@ export class RelaySession {
   /** Issues a short-lived pairing code the phone can type. */
   createPairingCode(bridgeId: string, bridgeName: string): PairingCodeResult {
     this.pruneExpiredCodes();
-    const code = generateCode();
+    // An account belongs to one bridge. A second bridge must not be able to take it
+    // over: it would mint a device token inside someone else's account and read
+    // their whole team.
+    if (this.bridgeId !== null && this.bridgeId !== bridgeId) {
+      throw new Error('ACCOUNT_OWNED');
+    }
+    const code = generatePairingCode(secureRandom);
     const expiresAt = this.now() + PAIRING_CODE_TTL_MS;
     this.codes.set(code, { code, bridgeId, bridgeName, expiresAt });
+    // The desktop identifies itself here; from now on its token is the one that
+    // manages this account's devices.
+    this.bridgeId = bridgeId;
     return { code, expiresAt };
+  }
+
+  /** The bridge that owns this account, or null if no bridge has claimed it yet. */
+  get ownerBridgeId(): string | null {
+    return this.bridgeId;
   }
 
   /** Exchanges a pairing code for a device token. */
@@ -105,11 +134,26 @@ export class RelaySession {
     deviceName: string,
     clientVersion: string,
   ): Promise<PairingResponse> {
+    // A wrong guess must not be free: the code space is only a million, and the
+    // endpoint is unauthenticated by design (the code is the credential).
+    if (this.now() < this.pairBlockedUntil) {
+      return {
+        ok: false,
+        code: 'RATE_LIMITED',
+        message: 'Too many wrong codes. Wait a moment and ask the desktop for a new one.',
+      };
+    }
+
     // Look the code up before pruning, so an expired code is reported as expired rather
     // than as unknown: the phone needs to know to ask the desktop for a new one.
     const record = this.codes.get(code);
     if (!record) {
       this.pruneExpiredCodes();
+      this.failedPairAttempts += 1;
+      if (this.failedPairAttempts >= MAX_PAIR_ATTEMPTS) {
+        this.failedPairAttempts = 0;
+        this.pairBlockedUntil = this.now() + PAIR_BLOCK_MS;
+      }
       return { ok: false, code: 'PAIRING_CODE_UNKNOWN', message: 'No bridge is waiting for that code.' };
     }
     if (record.expiresAt <= this.now()) {
@@ -119,6 +163,7 @@ export class RelaySession {
 
     // Single use: the code is consumed the moment it is claimed.
     this.codes.delete(code);
+    this.failedPairAttempts = 0;
 
     const { token, expiresAt } = await issueToken(
       deviceId,
@@ -127,6 +172,17 @@ export class RelaySession {
       this.secret,
       this.now(),
     );
+
+    // A revoked device stays revoked. Re-pairing the same id must not silently
+    // re-arm a phone the desktop deliberately cut off.
+    const existing = this.devices.get(deviceId);
+    if (existing?.revoked) {
+      return {
+        ok: false,
+        code: 'DEVICE_REVOKED',
+        message: 'This phone was unpaired on the desktop. Pair it again there first.',
+      };
+    }
 
     this.devices.set(deviceId, {
       deviceId,
@@ -258,6 +314,10 @@ export class RelaySession {
    */
   handleFrame(from: PeerSocket, raw: string): void {
     if (from.role === 'device') {
+      // A device that was revoked while its socket was open must stop being able to
+      // drive the desktop.
+      const device = this.devices.get(from.subject);
+      if (device?.revoked) return;
       this.sendToBridge(raw);
       return;
     }
@@ -310,8 +370,15 @@ export class RelaySession {
       return raw;
     }
     this.seq += 1;
-    frame.seq = this.seq;
-    return JSON.stringify(frame);
+    if ('seq' in frame) {
+      // The bridge should not set `seq`; if it does, the relay's number wins.
+      frame.seq = this.seq;
+      return JSON.stringify(frame);
+    }
+    // The sequence number is injected into the original text rather than
+    // re-serialising the parsed object: re-serialising would round 64-bit integers,
+    // and the relay's job is to route frames, not to interpret them.
+    return raw.replace(/^(\s*)\{/, `$1{"seq":${this.seq},`);
   }
 
   private sendToBridge(raw: string): void {
@@ -344,12 +411,15 @@ export class RelaySession {
   }
 }
 
-function generateCode(): string {
-  let code = '';
-  for (let i = 0; i < 6; i += 1) {
-    code += String(Math.floor(Math.random() * 10));
-  }
-  return code;
+/**
+ * A pairing code is a credential, so it is drawn from the CSPRNG rather than
+ * `Math.random`. The generator itself is the shared one, so the code the relay issues
+ * is exactly the code the client's validator accepts.
+ */
+function secureRandom(): number {
+  const buffer = new Uint32Array(1);
+  crypto.getRandomValues(buffer);
+  return buffer[0]! / 2 ** 32;
 }
 
 export type { TokenPayload };

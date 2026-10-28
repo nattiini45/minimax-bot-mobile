@@ -49,9 +49,16 @@ export class SeqRing {
       return { entries: [], truncated: false };
     }
     const oldest = this.entries[0]!.seq;
+    const newest = this.entries[this.entries.length - 1]!.seq;
     // The client's next expected frame is afterSeq + 1; if that is older than the buffer,
     // part of the range is gone.
-    const truncated = afterSeq + 1 < oldest;
+    let truncated = afterSeq + 1 < oldest;
+    // The client is ahead of the relay — its cursor cannot be served. That happens after
+    // the relay restarts and its sequence counter resets, and it must be reported as a
+    // gap, not as "you are up to date".
+    if (afterSeq > newest) {
+      truncated = true;
+    }
     const entries = this.entries.filter((entry) => entry.seq > afterSeq);
     return { entries, truncated };
   }
