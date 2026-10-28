@@ -1,0 +1,26 @@
+{
+  "name": "@minimax-bot/relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker + Durable Object relay between the MiniMax Bot bridge and its mobile clients.",
+  "license": "UNLICENSED",
+  "author": "@nattiini45 (and contributors)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../..",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "mint:token": "npm run build -w @minimax-bot/protocol && node scripts/mint-bridge-token.mjs"
+  },
+  "dependencies": {
+    "@minimax-bot/protocol": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.154.0"
+  }
+}

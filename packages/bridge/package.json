@@ -1,0 +1,22 @@
+{
+  "name": "@minimax-bot/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MiniMax Code Mini App plugin that bridges the @minimax-bot team to the mobile client.",
+  "license": "UNLICENSED",
+  "author": "@nattiini45 (and contributors)",
+  "type": "module",
+  "mcode": {
+    "schemaVersion": 2,
+    "miniApp": "./miniapp/miniapp.json"
+  },
+  "scripts": {
+    "sync:protocol": "node scripts/sync-protocol.mjs",
+    "test": "node scripts/sync-protocol.mjs && node --test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "~5.9.3"
+  }
+}

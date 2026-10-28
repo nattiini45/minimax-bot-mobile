@@ -1,0 +1,31 @@
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+.expo-shared/
+web-build/
+*.tsbuildinfo
+.env
+.env.local
+.env*.local
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+wrangler.local.toml
+.dev.vars
+apps/app/ios/
+apps/app/android/
+
+# Vendored by packages/bridge/scripts/sync-protocol.mjs during the build.
+packages/bridge/miniapp/node/protocol/
+
+# Built release APKs. They are large and reproducible from the Linux build host.
+artifacts/
+
+# The local Wrangler dev server's state.
+packages/relay/.wrangler/
+
+# Scratch scaffolds created while debugging the Mini App package contract.
+miniapps/
