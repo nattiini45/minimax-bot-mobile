@@ -1,0 +1,22 @@
+name = "minimax-bot-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# One Durable Object per account. The account id is the first path segment of every
+# request, so the bridge and its phones always meet in the same room.
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+[observability]
+enabled = true
+
+# RELAY_SECRET is the shared HMAC key used to sign device and bridge tokens.
+# Set it with `wrangler secret put RELAY_SECRET` (never commit it).
+[vars]
+RELAY_ACCOUNT = "default"
