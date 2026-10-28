@@ -71,6 +71,7 @@ export type RelayErrorCode =
   | 'DEVICE_REVOKED'
   | 'BRIDGE_OFFLINE'
   | 'BAD_REQUEST'
+  | 'ACCOUNT_OWNED'
   | 'RATE_LIMITED';
 
 export function describeRelayError(code: RelayErrorCode): string {
@@ -89,7 +90,11 @@ export function describeRelayError(code: RelayErrorCode): string {
       return 'The desktop is offline. Start MiniMax Code and try again.';
     case 'RATE_LIMITED':
       return 'Too many attempts. Wait a moment and try again.';
+    case 'ACCOUNT_OWNED':
+      return 'This account already belongs to another desktop.';
     case 'BAD_REQUEST':
       return 'The request could not be understood.';
+    default:
+      return 'The relay refused the request.';
   }
 }

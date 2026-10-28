@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AGENT_BACKED_OPS,
+  BRIDGE_LOCAL_OPS,
   EVENT_TYPES,
   OP_TOOL,
   OP_TYPES,
+  TEAM_TOOLS,
   generatePairingCode,
   isEventType,
   isOpType,
+  isValidClientMessageId,
   isValidPairingCode,
 } from '../src/index.js';
 
@@ -85,13 +89,14 @@ describe('operation to tool mapping', () => {
   });
 
   it('covers the whole team tool surface', () => {
-    const tools = new Set(Object.values(OP_TOOL));
+    const tools = new Set(TEAM_TOOLS);
     for (const tool of [
       'list_team',
       'message_bot',
       'dispatch_tasks',
       'get_tasks',
       'cancel_tasks',
+      'post_group',
       'list_helpers',
       'start_helper',
       'stop_helper',
@@ -111,10 +116,31 @@ describe('operation to tool mapping', () => {
       expect(tools.has(tool)).toBe(true);
     }
   });
+
+  it('maps the 21-tool surface exactly once', () => {
+    expect(TEAM_TOOLS).toHaveLength(21);
+    expect(new Set(TEAM_TOOLS).size).toBe(21);
+  });
+
+  it('never classifies one operation as both tool backed and agent backed', () => {
+    const toolOps = new Set<string>(Object.keys(OP_TOOL));
+    for (const op of AGENT_BACKED_OPS) {
+      expect(toolOps.has(op)).toBe(false);
+    }
+  });
+
+  it('classifies every operation exactly once', () => {
+    const classified = [
+      ...Object.keys(OP_TOOL),
+      ...AGENT_BACKED_OPS,
+      ...BRIDGE_LOCAL_OPS,
+    ] as string[];
+    expect(new Set(classified).size).toBe(classified.length);
+    expect(new Set(classified).size).toBe(OP_TYPES.length);
+  });
 });
 
-describe('pairing codes', () => {
-  it('generates six digits', () => {
+describe('pairing codes', () => {  it('generates six digits', () => {
     const code = generatePairingCode();
     expect(code).toHaveLength(6);
     expect(code).toMatch(/^\d{6}$/);
@@ -131,5 +157,23 @@ describe('pairing codes', () => {
   it('can be driven by an injected random source', () => {
     expect(generatePairingCode(() => 0)).toBe('000000');
     expect(generatePairingCode(() => 0.999999)).toBe('999999');
+  });
+});
+
+describe('client chosen message ids', () => {
+  it('accepts a short, unambiguous id', () => {
+    expect(isValidClientMessageId('local_abc123')).toBe(true);
+    expect(isValidClientMessageId('m-1')).toBe(true);
+    expect(isValidClientMessageId('A_b-9')).toBe(true);
+  });
+
+  it('refuses an id the bridge must not store', () => {
+    expect(isValidClientMessageId('')).toBe(false);
+    expect(isValidClientMessageId('has space')).toBe(false);
+    expect(isValidClientMessageId('has/slash')).toBe(false);
+    expect(isValidClientMessageId('has:colon')).toBe(false);
+    expect(isValidClientMessageId('x'.repeat(65))).toBe(false);
+    expect(isValidClientMessageId(undefined)).toBe(false);
+    expect(isValidClientMessageId(42)).toBe(false);
   });
 });

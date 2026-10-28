@@ -252,6 +252,14 @@ export interface OpSendMessage {
   /** Bot ids to @mention in a group. */
   mentions?: string[];
   attachments?: string[];
+  /**
+   * Id the client chose for this message.
+   *
+   * The bridge echoes it back as the committed message id, so the phone can show the
+   * message the instant it is sent and replace it in place when the desktop confirms
+   * it, without guessing which bubble to reconcile.
+   */
+  clientMessageId?: string;
 }
 
 export interface OpSendMessageResult {
@@ -656,15 +664,25 @@ export function isEventType(type: string): type is EventType {
 }
 
 /**
+ * Checks a client-chosen message id.
+ *
+ * The bridge accepts the id and stores it as the committed message id, so it is
+ * restricted to a short, unambiguous set of characters and a bounded length. A client
+ * that sends anything else simply gets an id chosen for it.
+ */
+export function isValidClientMessageId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
+/**
  * Maps an operation to the team tool that implements it.
  *
  * The bridge prefers this table to reach a tool, and falls back to a name match on
  * `mcp__minimax-bot__<tool>`. Keeping it here means the client, the relay and the bridge
  * agree on which tool backs which operation.
  */
-export const OP_TOOL: Readonly<Partial<Record<OpType, string>>> = {
+export const OP_TOOL = {
   'op.list_team': 'list_team',
-  'op.send_message': 'message_bot',
   'op.dispatch': 'dispatch_tasks',
   'op.list_tasks': 'get_tasks',
   'op.cancel_task': 'cancel_tasks',
@@ -683,7 +701,50 @@ export const OP_TOOL: Readonly<Partial<Record<OpType, string>>> = {
   'op.list_schedules': 'list_schedules',
   'op.create_schedule': 'create_schedule',
   'op.delete_schedule': 'delete_schedule',
-};
+} as const satisfies Partial<Record<OpType, string>>;
 
 /** Operations the bridge answers from its own agent rather than from a team tool. */
 export const AGENT_BACKED_OPS: readonly OpType[] = ['op.send_message', 'op.abort_turn', 'op.respond_permission', 'op.answer_question'];
+
+/**
+ * Operations the bridge answers itself, without a team tool and without the agent.
+ *
+ * Together with {@link OP_TOOL} and {@link AGENT_BACKED_OPS} this accounts for every
+ * operation, so a consumer can ask "how is this op served?" and get an answer.
+ */
+export const BRIDGE_LOCAL_OPS: readonly OpType[] = ['op.get_usage', 'op.react', 'op.list_history'];
+
+/**
+ * Every operation is either tool backed, agent backed or answered by the bridge.
+ *
+ * If an operation is added to {@link OP_TYPES} and none of the three, this fails to
+ * compile — which is the point. The conditional is deliberately not distributive, so
+ * that an empty union resolves to `true` rather than to `never`.
+ */
+type UnclassifiedOp = Exclude<
+  OpType,
+  | keyof typeof OP_TOOL
+  | (typeof AGENT_BACKED_OPS)[number]
+  | (typeof BRIDGE_LOCAL_OPS)[number]
+>;
+const _everyOpIsClassified: [UnclassifiedOp] extends [never] ? true : never = true;
+void _everyOpIsClassified;
+
+/**
+ * Team tools the agent drives on its own behalf, which the client never calls.
+ *
+ * `op.send_message` is served by the agent, and the agent reaches the team through
+ * `message_bot` (hand work to another Bot) and `post_group` (post a request to a
+ * group). Listing them keeps the tool surface complete without putting them back
+ * into {@link OP_TOOL}, which would classify one operation twice.
+ */
+export const AGENT_DRIVEN_TOOLS = ['message_bot', 'post_group'] as const;
+
+/**
+ * The complete `@minimax-bot` team tool surface: 21 tools.
+ *
+ * Every tool the MCP server exposes is either client-invokable ({@link OP_TOOL}) or
+ * agent-driven ({@link AGENT_DRIVEN_TOOLS}). A tool that appears in neither would be
+ * unreachable, and one appearing in both would be ambiguous.
+ */
+export const TEAM_TOOLS = [...Object.values(OP_TOOL), ...AGENT_DRIVEN_TOOLS] as const;

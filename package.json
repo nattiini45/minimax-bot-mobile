@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @minimax-bot/protocol && npm run build -w @minimax-bot/relay && npm run sync:protocol -w @minimax-bot/bridge",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build -w @minimax-bot/protocol && npm run sync:protocol -w @minimax-bot/bridge && npm run typecheck --workspaces --if-present",
     "test": "npm run build && npm run test -w @minimax-bot/bridge && vitest run && npm run test -w @minimax-bot/app",
     "test:unit": "vitest run",
     "test:bridge": "npm run test -w @minimax-bot/bridge",
