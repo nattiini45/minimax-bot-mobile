@@ -16,10 +16,87 @@ import { Bridge } from '../miniapp/node/bridge.mjs';
  * @typedef {{buckets: any[], byBot: any[], totals: {turns: number, chars: number, tools: number, durationMs: number, errors: number}}} UsageResult
  */
 
+/**
+ * The team tools the bridge talks to.
+ *
+ * The schemas are the ones the real `@minimax-bot` team tools advertise, copied from
+ * the tool catalogue rather than invented: the whole point of mapping an operation
+ * payload onto the live schema is that the two agree.
+ */
 const TEAM_TOOLS = [
   { name: 'mcp__minimax-bot__list_team', server: 'minimax-bot', tool: 'list_team' },
   { name: 'mcp__minimax-bot__message_bot', server: 'minimax-bot', tool: 'message_bot' },
-  { name: 'mcp__minimax-bot__get_tasks', server: 'minimax-bot', tool: 'get_tasks' },
+  {
+    name: 'mcp__minimax-bot__dispatch_tasks',
+    server: 'minimax-bot',
+    tool: 'dispatch_tasks',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        caller_bot_id: { type: 'string', minLength: 1 },
+        request_id: { type: 'string', pattern: '^[A-Za-z0-9_.-]{1,128}$' },
+        tasks: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['to', 'message'],
+            properties: {
+              to: { type: 'string' },
+              message: { type: 'string', minLength: 1, maxLength: 20000 },
+              title: { type: 'string', maxLength: 80 },
+            },
+          },
+        },
+      },
+      required: ['request_id', 'tasks'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mcp__minimax-bot__get_tasks',
+    server: 'minimax-bot',
+    tool: 'get_tasks',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        caller_bot_id: { type: 'string', minLength: 1 },
+        task_id: { type: 'string' },
+        batch_id: { type: 'string' },
+        wait_ms: { type: 'integer', minimum: 0, maximum: 20000 },
+        result_offset: { type: 'integer', minimum: 0 },
+      },
+      required: [],
+      additionalProperties: false,
+      oneOf: [{ required: ['task_id'] }, { required: ['batch_id'] }],
+    },
+  },
+  {
+    name: 'mcp__minimax-bot__remember',
+    server: 'minimax-bot',
+    tool: 'remember',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        caller_bot_id: { type: 'string', minLength: 1 },
+        text: { type: 'string', minLength: 1, maxLength: 1200 },
+        key: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]{0,63}$' },
+        scope: { type: 'string', enum: ['self', 'team', 'bot'] },
+        target_bot: { type: 'string' },
+        replace_id: { type: 'string', pattern: '^[a-f0-9]{8}$' },
+        expected_revision: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        pinned: { type: 'boolean' },
+        source: { type: 'string' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+      anyOf: [{ required: ['key'] }, { required: ['replace_id'] }],
+    },
+  },
+  { name: 'mcp__minimax-bot__list_helpers', server: 'minimax-bot', tool: 'list_helpers' },
+  { name: 'mcp__minimax-bot__list_schedules', server: 'minimax-bot', tool: 'list_schedules' },
 ];
 
 async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
@@ -40,11 +117,12 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
       async list() {
         return { tools, partial: false };
       },
-      async call(input) {
-        toolCalls.push(input);
-        if (input.name.endsWith('list_team')) {
+      async call(name, args) {
+        toolCalls.push({ name, arguments: args });
+        if (name.endsWith('list_team')) {
           return {
-            ok: true,
+            kind: 'mcp',
+            isError: false,
             content: [
               {
                 type: 'text',
@@ -76,13 +154,15 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
             ],
           };
         }
-        if (input.name.endsWith('get_tasks')) {
+        if (name.endsWith('get_tasks')) {
           return {
-            ok: true,
-            structuredContent: { tasks: [{ taskId: 't1', state: 'running' }] },
+            kind: 'mcp',
+            isError: false,
+            content: [],
+            structuredContent: { tasks: [{ task_id: 't1', state: 'running' }] },
           };
         }
-        return { ok: true, content: [{ type: 'text', text: '{"ok":true}' }] };
+        return { kind: 'mcp', isError: false, content: [{ type: 'text', text: '{"ok":true}' }] };
       },
     },
   };
@@ -153,7 +233,7 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
 test('the bridge links the team on start', async () => {
   const { bridge, dispose } = await makeBridge();
   assert.equal(bridge.tools.available, true);
-  assert.equal(bridge.tools.catalog.length, 3);
+  assert.equal(bridge.tools.catalog.length, TEAM_TOOLS.length);
   assert.equal(bridge.diagnostics().teamToolsAvailable, true);
   assert.equal(bridge.diagnostics().agentAvailable, true);
   await dispose();
@@ -166,7 +246,7 @@ test('list_team returns the roster and the diagnostics', async () => {
   assert.equal(result.bots.length, 1);
   assert.equal(result.bots[0].name, 'Writer');
   assert.equal(result.groups.length, 1);
-  assert.equal(result.diagnostics.toolCount, 3);
+  assert.equal(result.diagnostics.toolCount, TEAM_TOOLS.length);
   await dispose();
 });
 
@@ -332,14 +412,140 @@ test('an unknown operation is refused', async () => {
   await dispose();
 });
 
-test('an operation the team cannot serve is refused', async () => {
+test('a task list without a selector covers the batches the bridge knows', async () => {
+  const { bridge, toolCalls, dispose } = await makeBridge();
+  bridge.ledger.rememberBatch('batch_1');
+
+  const result = /** @type {any} */ (await bridge.dispatch('op.list_tasks', {}));
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].taskId, 't1');
+  assert.deepEqual(result.batchIds, ['batch_1']);
+  // The team's task tool answers for one batch at a time, so the list is never
+  // complete, and the answer says so rather than pretending otherwise.
+  assert.equal(result.partial, true);
+  assert.equal(toolCalls[0].arguments.batch_id, 'batch_1');
+  await dispose();
+});
+
+test('a task list without a selector and without a batch is empty', async () => {
   const { bridge, sent, dispose } = await makeBridge();
   await bridge.handleFrame({ v: 1, id: 'f1', ts: 1, type: 'op.list_tasks', source: 'app', payload: {} });
 
   const ack = sent.find((frame) => frame.type === 'ack');
   assert.ok(ack);
-  assert.equal(ack.payload.result.tool, 'get_tasks');
-  assert.equal(ack.payload.result.data.tasks[0].taskId, 't1');
+  assert.deepEqual(ack.payload.result.tasks, []);
+  assert.equal(ack.payload.result.partial, true);
+  await dispose();
+});
+
+test('a task list that names a batch asks the team about that batch', async () => {
+  const { bridge, toolCalls, dispose } = await makeBridge();
+  const result = /** @type {any} */ (await bridge.dispatch('op.list_tasks', { batchId: 'batch_9' }));
+
+  assert.equal(result.tool, 'get_tasks');
+  assert.equal(toolCalls[0].arguments.batch_id, 'batch_9');
+  await dispose();
+});
+
+test('a dispatched batch is remembered, so the task list can be rebuilt', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.context.tool.call = async (name, args) => ({
+    kind: 'mcp',
+    isError: false,
+    content: [],
+    structuredContent: {
+      batch_id: 'batch_7',
+      request_id: 'phone-1',
+      complete: false,
+      tasks: [{ task_id: 't7', kind: 'bot', bot_id: 'bot_b1', status: 'queued', created_at: 10 }],
+    },
+  });
+
+  const result = /** @type {any} */ (await bridge.dispatch('op.dispatch', { botIds: ['bot_b1'], prompt: 'go' }));
+
+  assert.equal(result.batchId, 'batch_7');
+  assert.deepEqual(bridge.ledger.batches(), ['batch_7']);
+  // The task list is in the protocol's shape, not the tool's.
+  assert.equal(result.tasks[0].taskId, 't7');
+  assert.equal(result.tasks[0].state, 'queued');
+  assert.deepEqual(result.tasks[0].botIds, ['bot_b1']);
+  assert.equal(result.tasks[0].createdAt, 10);
+  await dispose();
+});
+
+test('the helper list is in the shape the protocol speaks', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.tools.call = async () => ({
+    ok: true,
+    content: [],
+    // The real team tool answers with a bare array of helpers.
+    structuredContent: [
+      { helper_id: 'hlp_1', bot: 'Writer', title: 'Research', status: 'done', seconds: 42, report: 'done' },
+    ],
+  });
+
+  const result = /** @type {any} */ (await bridge.dispatch('op.list_helpers', {}));
+
+  assert.equal(result.helpers.length, 1);
+  assert.equal(result.helpers[0].helperId, 'hlp_1');
+  assert.equal(result.helpers[0].state, 'done');
+  assert.equal(result.helpers[0].seconds, 42);
+  assert.equal(result.helpers[0].detail, 'done');
+  await dispose();
+});
+
+test('the schedule list is in the shape the protocol speaks', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.tools.call = async () => ({
+    ok: true,
+    content: [],
+    // The real team tool answers with a bare array of schedules.
+    structuredContent: [
+      {
+        schedule_id: 'sch_1',
+        name: 'Standup',
+        bot_id: 'bot_b1',
+        kind: 'daily',
+        time: '09:00',
+        prompt: 'summarise',
+        enabled: true,
+        next_run: '2026-10-29T09:00:00.000Z',
+        last_run: null,
+      },
+    ],
+  });
+
+  const result = /** @type {any} */ (await bridge.dispatch('op.list_schedules', {}));
+
+  assert.equal(result.schedules.length, 1);
+  assert.equal(result.schedules[0].scheduleId, 'sch_1');
+  assert.equal(result.schedules[0].spec, '09:00');
+  assert.equal(result.schedules[0].targetBotId, 'bot_b1');
+  assert.equal(result.schedules[0].nextRunAt, Date.parse('2026-10-29T09:00:00.000Z'));
+  await dispose();
+});
+
+test('a memory the phone asks for is filed under a topic of its own', async () => {
+  const { bridge, toolCalls, dispose } = await makeBridge();
+
+  const result = /** @type {any} */ (await bridge.dispatch('op.remember', { botId: 'bot_b1', text: 'note' }));
+
+  // The team's memory tool refuses a memory with neither a topic nor an entry to
+  // replace, so the bridge gives the note a topic.
+  assert.match(result.key, /^[a-z0-9][a-z0-9._-]{0,63}$/);
+  assert.equal(toolCalls[0].arguments.key, result.key);
+  assert.equal(toolCalls[0].arguments.target_bot, 'bot_b1');
+  assert.equal(toolCalls[0].arguments.text, 'note');
+  await dispose();
+});
+
+test('a memory the phone files under a topic keeps that topic', async () => {
+  const { bridge, toolCalls, dispose } = await makeBridge();
+
+  await bridge.dispatch('op.remember', { botId: 'bot_b1', text: 'note', key: 'launch.date' });
+
+  assert.equal(toolCalls[0].arguments.key, 'launch.date');
   await dispose();
 });
 

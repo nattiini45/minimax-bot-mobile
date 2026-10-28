@@ -6,6 +6,10 @@
   "license": "UNLICENSED",
   "author": "@nattiini45 (and contributors)",
   "type": "module",
+  "mcode": {
+    "schemaVersion": 2,
+    "miniApp": "./miniapp/miniapp.json"
+  },
   "scripts": {
     "sync:protocol": "node scripts/sync-protocol.mjs",
     "test": "node scripts/sync-protocol.mjs && node --test",

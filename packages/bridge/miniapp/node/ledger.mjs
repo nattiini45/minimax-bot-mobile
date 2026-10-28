@@ -11,6 +11,8 @@ import { join } from 'node:path';
 
 const LEDGER_FILE = 'ledger.json';
 const MAX_ENTRIES = 5000;
+/** How many dispatched batches are remembered for the task list. */
+const MAX_BATCHES = 50;
 
 export class Ledger {
   constructor(dataDir, { maxEntries = MAX_ENTRIES } = {}) {
@@ -18,6 +20,16 @@ export class Ledger {
     this.maxEntries = maxEntries;
     /** @type {Array<object>} */
     this.entries = [];
+    /**
+     * The batches the bridge has dispatched.
+     *
+     * The team's task tool answers for one batch at a time and has no "list
+     * everything" call, so the batch ids are what make a task list possible at all.
+     * They are kept across restarts for the same reason.
+     *
+     * @type {string[]}
+     */
+    this.batchIds = [];
   }
 
   async init() {
@@ -27,8 +39,12 @@ export class Ledger {
       if (Array.isArray(parsed.entries)) {
         this.entries = parsed.entries.slice(-this.maxEntries);
       }
+      if (Array.isArray(parsed.batchIds)) {
+        this.batchIds = parsed.batchIds.slice(-MAX_BATCHES);
+      }
     } catch {
       this.entries = [];
+      this.batchIds = [];
     }
     return this;
   }
@@ -37,9 +53,23 @@ export class Ledger {
     await mkdir(this.dataDir, { recursive: true });
     await writeFile(
       join(this.dataDir, LEDGER_FILE),
-      `${JSON.stringify({ entries: this.entries }, null, 2)}\n`,
+      `${JSON.stringify({ entries: this.entries, batchIds: this.batchIds }, null, 2)}\n`,
       'utf8',
     );
+  }
+
+  /** Remembers a dispatched batch, so its tasks can be read back later. */
+  rememberBatch(batchId) {
+    if (!batchId || this.batchIds.includes(batchId)) return;
+    this.batchIds.push(batchId);
+    if (this.batchIds.length > MAX_BATCHES) {
+      this.batchIds = this.batchIds.slice(-MAX_BATCHES);
+    }
+  }
+
+  /** The remembered batch ids, oldest first. */
+  batches() {
+    return [...this.batchIds];
   }
 
   /** Records a completed turn. */

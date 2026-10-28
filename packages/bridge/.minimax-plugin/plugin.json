@@ -1,10 +1,12 @@
 {
+  "schemaVersion": 1,
   "name": "minimax-bot-bridge",
   "displayName": "MiniMax Bot Bridge",
   "version": "0.1.0",
   "description": "Connects the @minimax-bot team to the mobile client: runs Bot turns, calls every team tool, and relays them to your phone.",
   "author": "@nattiini45 (and contributors)",
   "icon": "icon.png",
+  "darkIcon": "icon-dark.png",
   "category": "Productivity",
   "exampleQueries": [
     "Open MiniMax Bot Bridge and pair my phone",
@@ -12,6 +14,8 @@
     "Which phones are linked to this desktop?"
   ],
   "apps": [],
-  "mcpServers": [],
+  "mcpServers": [
+    "servers.mcp.json"
+  ],
   "skills": []
 }

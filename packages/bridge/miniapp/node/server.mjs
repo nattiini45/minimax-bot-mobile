@@ -36,6 +36,7 @@ export async function start(context) {
       bridge.config = next;
       bridge.relay.url = next.relayUrl;
       bridge.relay.accountId = next.accountId;
+      bridge.relay.bridgeId = next.bridgeId;
       bridge.relay.token = next.bridgeToken;
       bridge.relay.name = next.bridgeName;
       bridge.relay.start();
@@ -160,6 +161,20 @@ async function handle(request, response, deps) {
       relayUrl: typeof body.relayUrl === 'string' ? body.relayUrl : current.relayUrl,
       accountId: typeof body.accountId === 'string' ? body.accountId : current.accountId,
       bridgeName: typeof body.bridgeName === 'string' ? body.bridgeName : current.bridgeName,
+      // The bridge id is the subject of the bridge token, so it has to be pinnable:
+      // a token is minted for one specific bridge id, and the desktop must be told
+      // which id it is before the token is pasted in.
+      bridgeId:
+        typeof body.bridgeId === 'string' && body.bridgeId.length > 0
+          ? body.bridgeId
+          : current.bridgeId,
+      // The bridge token is the relay's credential for this desktop. It is minted by
+      // whoever holds the relay secret and pasted into the surface, so it has to be
+      // settable here — but never echoed back, not even to the surface that set it.
+      bridgeToken:
+        typeof body.bridgeToken === 'string' && body.bridgeToken.length > 0
+          ? body.bridgeToken
+          : current.bridgeToken,
     };
     await setConfig(next);
     return json(response, 200, { ok: true, config: { ...next, bridgeToken: undefined } });

@@ -19,5 +19,6 @@
     }
   },
   "agentAccess": ["session.run"],
-  "toolAccess": ["call"]
+  "toolAccess": ["call"],
+  "mcpEndpoints": []
 }

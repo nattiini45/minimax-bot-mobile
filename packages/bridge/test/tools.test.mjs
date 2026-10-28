@@ -155,7 +155,7 @@ test('the gateway only exposes the team tools', async () => {
         };
       },
       async call() {
-        return { ok: true, content: [] };
+        return { kind: 'mcp', isError: false, content: [] };
       },
     },
   };
@@ -222,9 +222,9 @@ test('calling a tool forwards the mapped arguments', async () => {
           partial: false,
         };
       },
-      async call(input) {
-        seen.push(input);
-        return { ok: true, content: [{ type: 'text', text: '{"ok":true}' }] };
+      async call(name, args) {
+        seen.push({ name, arguments: args });
+        return { kind: 'mcp', isError: false, content: [{ type: 'text', text: '{"ok":true}' }] };
       },
     },
   });
@@ -246,7 +246,7 @@ test('a tool that reports an error is surfaced as a failure', async () => {
         };
       },
       async call() {
-        return { ok: true, isError: true, content: [] };
+        return { kind: 'mcp', isError: true, content: [] };
       },
     },
   });
@@ -255,4 +255,224 @@ test('a tool that reports an error is surfaced as a failure', async () => {
   const result = await gateway.call('list_team', {});
   assert.equal(result.ok, true);
   assert.equal(result.isError, true);
+});
+
+/*
+ * The three tools below take arguments that are not a flat mapping of the operation
+ * payload. Their schemas are the ones the real `@minimax-bot` team tools advertise.
+ */
+
+const DISPATCH_SCHEMA = {
+  type: 'object',
+  properties: {
+    caller_bot_id: { type: 'string', minLength: 1 },
+    request_id: { type: 'string', pattern: '^[A-Za-z0-9_.-]{1,128}$' },
+    tasks: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 32,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['to', 'message'],
+        properties: {
+          to: { type: 'string' },
+          message: { type: 'string', minLength: 1, maxLength: 20000 },
+          title: { type: 'string', maxLength: 80 },
+        },
+      },
+    },
+  },
+  required: ['request_id', 'tasks'],
+  additionalProperties: false,
+};
+
+const TASK_QUERY_SCHEMA = {
+  type: 'object',
+  properties: {
+    caller_bot_id: { type: 'string', minLength: 1 },
+    task_id: { type: 'string' },
+    batch_id: { type: 'string' },
+    wait_ms: { type: 'integer', minimum: 0, maximum: 20000 },
+    result_offset: { type: 'integer', minimum: 0 },
+  },
+  required: [],
+  additionalProperties: false,
+  oneOf: [{ required: ['task_id'] }, { required: ['batch_id'] }],
+};
+
+const REMEMBER_SCHEMA = {
+  type: 'object',
+  properties: {
+    caller_bot_id: { type: 'string', minLength: 1 },
+    text: { type: 'string', minLength: 1, maxLength: 1200 },
+    key: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]{0,63}$' },
+    scope: { type: 'string', enum: ['self', 'team', 'bot'] },
+    target_bot: { type: 'string' },
+    replace_id: { type: 'string', pattern: '^[a-f0-9]{8}$' },
+    expected_revision: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    pinned: { type: 'boolean' },
+    source: { type: 'string' },
+  },
+  required: ['text'],
+  additionalProperties: false,
+  anyOf: [{ required: ['key'] }, { required: ['replace_id'] }],
+};
+
+test('a dispatch becomes the list of tasks the team asks for', () => {
+  const args = buildToolArguments(
+    { botIds: ['bot_b1', 'bot_b2'], prompt: 'write the changelog', title: 'Changelog' },
+    DISPATCH_SCHEMA,
+    'dispatch_tasks',
+  );
+
+  assert.match(String(args.request_id), /^[A-Za-z0-9_.-]{1,128}$/);
+  assert.deepEqual(args.tasks, [
+    { to: 'bot_b1', message: 'write the changelog', title: 'Changelog' },
+    { to: 'bot_b2', message: 'write the changelog', title: 'Changelog' },
+  ]);
+});
+
+test('a dispatch without a Bot is refused before it is sent', () => {
+  assert.throws(
+    () => buildToolArguments({ prompt: 'write the changelog' }, DISPATCH_SCHEMA, 'dispatch_tasks'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.equal(error.code, 'INVALID_ARGUMENTS');
+      assert.equal(error.details.field, 'botIds');
+      return true;
+    },
+  );
+});
+
+test('a dispatch without a message is refused before it is sent', () => {
+  assert.throws(
+    () => buildToolArguments({ botIds: ['bot_b1'] }, DISPATCH_SCHEMA, 'dispatch_tasks'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.equal(error.details.field, 'prompt');
+      return true;
+    },
+  );
+});
+
+test('a dispatch keeps the idempotency key the client chose', () => {
+  const args = buildToolArguments(
+    { botIds: ['bot_b1'], prompt: 'go', requestId: 'phone-1' },
+    DISPATCH_SCHEMA,
+    'dispatch_tasks',
+  );
+  assert.equal(args.request_id, 'phone-1');
+});
+
+test('a task query names the batch it asks about', () => {
+  const args = buildToolArguments({ batchId: 'batch_1', waitMs: 500 }, TASK_QUERY_SCHEMA, 'get_tasks');
+  assert.deepEqual(args, { batch_id: 'batch_1', wait_ms: 500 });
+});
+
+test('a task query without a selector is refused', () => {
+  assert.throws(
+    () => buildToolArguments({}, TASK_QUERY_SCHEMA, 'get_tasks'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.equal(error.code, 'INVALID_ARGUMENTS');
+      assert.match(error.message, /Exactly one of task_id, batch_id/);
+      return true;
+    },
+  );
+});
+
+test('a task query that names both a task and a batch is refused', () => {
+  assert.throws(
+    () => buildToolArguments({ taskId: 't1', batchId: 'b1' }, TASK_QUERY_SCHEMA, 'get_tasks'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.match(error.message, /Exactly one of task_id, batch_id/);
+      return true;
+    },
+  );
+});
+
+test('a memory is filed under the topic it names', () => {
+  const args = buildToolArguments(
+    { botId: 'bot_b1', text: 'the launch is on friday', key: 'launch.date' },
+    REMEMBER_SCHEMA,
+    'remember',
+  );
+  assert.deepEqual(args, {
+    text: 'the launch is on friday',
+    target_bot: 'bot_b1',
+    key: 'launch.date',
+  });
+});
+
+test('a memory without a topic or an entry to replace is refused', () => {
+  assert.throws(
+    () => buildToolArguments({ botId: 'bot_b1', text: 'note' }, REMEMBER_SCHEMA, 'remember'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.equal(error.code, 'INVALID_ARGUMENTS');
+      assert.match(error.message, /One of key, replace_id/);
+      return true;
+    },
+  );
+});
+
+test('a memory that replaces an entry carries the entry id', () => {
+  const args = buildToolArguments(
+    { botId: 'bot_b1', text: 'note', replaceId: 'a1b2c3d4' },
+    REMEMBER_SCHEMA,
+    'remember',
+  );
+  assert.deepEqual(args, {
+    text: 'note',
+    target_bot: 'bot_b1',
+    replace_id: 'a1b2c3d4',
+  });
+});
+
+test('a memory without a text is refused', () => {
+  assert.throws(
+    () => buildToolArguments({ botId: 'bot_b1', key: 'topic' }, REMEMBER_SCHEMA, 'remember'),
+    (error) => {
+      assert.ok(error instanceof ToolArgumentError);
+      assert.deepEqual(error.details.missing, ['text']);
+      return true;
+    },
+  );
+});
+
+test('the gateway dispatches a dispatch with the task list', async () => {
+  const seen = [];
+  const gateway = new ToolGateway({
+    tool: {
+      async list() {
+        return {
+          tools: [
+            {
+              name: 'mcp__minimax-bot__dispatch_tasks',
+              server: 'minimax-bot',
+              tool: 'dispatch_tasks',
+              inputSchema: DISPATCH_SCHEMA,
+            },
+          ],
+          partial: false,
+        };
+      },
+      async call(name, args) {
+        seen.push({ name, arguments: args });
+        return { kind: 'mcp', isError: false, content: [] };
+      },
+    },
+  });
+  await gateway.refresh();
+
+  const result = await gateway.call('dispatch_tasks', {
+    botIds: ['bot_b1'],
+    prompt: 'write the changelog',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(seen[0].arguments.tasks.length, 1);
+  assert.equal(seen[0].arguments.tasks[0].to, 'bot_b1');
 });

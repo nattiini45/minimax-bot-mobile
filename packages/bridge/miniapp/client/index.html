@@ -275,13 +275,22 @@
       <div class="label">Relay configuration</div>
       <input id="relay-url" type="url" placeholder="wss://relay.example.workers.dev" autocomplete="off" />
       <input id="account-id" type="text" placeholder="account id" autocomplete="off" />
+      <input id="bridge-id" type="text" placeholder="bridge id" autocomplete="off" />
+      <input
+        id="bridge-token"
+        type="password"
+        placeholder="bridge token (minted with the relay secret)"
+        autocomplete="off"
+        spellcheck="false"
+      />
       <div class="row" style="margin-top: 6px">
         <button type="button" id="save-config">Save</button>
         <span class="muted" id="config-state"></span>
       </div>
       <div class="hint">
-        The relay URL and account id are stored on this desktop only. The bridge token is generated
-        when the relay issues it.
+        The relay URL, the account id, the bridge id and the bridge token are stored on this desktop
+        only. The token is minted for one specific bridge id by whoever holds the relay secret:
+        <code>npm run mint:token -w @minimax-bot/relay</code>. It is never sent back to this surface.
       </div>
     </section>
 
@@ -327,11 +336,13 @@
             : 'Set the relay URL below to link this desktop to your phone.';
           $('relay-url').value = status.relayUrl || '';
           $('account-id').value = status.accountId || '';
+          $('bridge-id').value = status.bridgeId || '';
 
           const diagnostics = status.diagnostics || {};
           const team = diagnostics.teamToolsAvailable
             ? diagnostics.toolCount + ' team tools linked'
             : diagnostics.reason || 'The @minimax-bot team is not running.';
+          $('relay-hint').textContent += '  ·  bridge ' + (status.bridgeId || '?');
           $('relay-hint').textContent += '  ·  ' + team;
         } catch (error) {
           $('relay-state').innerHTML = '<span class="dot off"></span>unavailable';
@@ -413,14 +424,17 @@
       $('new-code').addEventListener('click', newCode);
       $('save-config').addEventListener('click', async () => {
         try {
-          await api('/api/config', {
-            method: 'POST',
-            body: JSON.stringify({
-              relayUrl: $('relay-url').value.trim(),
-              accountId: $('account-id').value.trim(),
-            }),
-          });
+          const payload = {
+            relayUrl: $('relay-url').value.trim(),
+            accountId: $('account-id').value.trim(),
+            bridgeId: $('bridge-id').value.trim(),
+          };
+          // Only sent when it was typed: an empty field must not wipe a stored token.
+          const token = $('bridge-token').value.trim();
+          if (token) payload.bridgeToken = token;
+          await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
           $('config-state').textContent = 'saved';
+          $('bridge-token').value = '';
           loadStatus();
         } catch (error) {
           $('config-state').textContent = error.message;

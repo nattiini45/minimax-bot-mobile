@@ -64,6 +64,181 @@ function mapGroup(group, idByName) {
   };
 }
 
+/**
+ * The task list, in the protocol's shape.
+ *
+ * The team tool answers in snake_case (`task_id`, `bot_id`, `created_at`) and calls
+ * the task's status `status`; the phone reads camelCase and calls it `state`. The
+ * renaming happens here rather than in the tool's own vocabulary.
+ *
+ * @param {any} data
+ */
+function normaliseTasks(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.tasks)) return data;
+  const batchId = data.batch_id ?? data.batchId;
+  const requestId = data.request_id ?? data.requestId;
+  return {
+    ...data,
+    ...(batchId ? { batchId } : {}),
+    ...(requestId ? { requestId } : {}),
+    tasks: data.tasks.map((task) => {
+      if (!task || typeof task !== 'object') return task;
+      const {
+        task_id: taskId,
+        bot_id: botId,
+        status,
+        created_at: createdAt,
+        started_at: startedAt,
+        ended_at: endedAt,
+        result_message_id: resultMessageId,
+        chat_id: chatId,
+        ...rest
+      } = task;
+      const state = status ?? rest.state;
+      return {
+        ...rest,
+        ...(taskId !== undefined ? { taskId } : {}),
+        ...(state !== undefined ? { state } : {}),
+        ...(botId ? { botIds: [botId] } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        updatedAt: endedAt ?? startedAt ?? createdAt ?? 0,
+        ...(resultMessageId ? { resultMessageId } : {}),
+        ...(chatId ? { chatId } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * The helper list, in the protocol's shape.
+ *
+ * The team tool answers with a bare array of helpers, each with a `helper_id`, a
+ * `status` and a duration in seconds. The phone reads an object with a `helpers`
+ * list, so the array is wrapped and the fields are renamed.
+ *
+ * @param {any} data
+ */
+function normaliseHelpers(data) {
+  const list = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.helpers)
+      ? data.helpers
+      : [];
+  const rest = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  return {
+    ...rest,
+    helpers: list.map((helper) => {
+      if (!helper || typeof helper !== 'object') return helper;
+      const { helper_id: helperId, status, seconds, report, error, ...fields } = helper;
+      return {
+        ...fields,
+        ...(helperId !== undefined ? { helperId } : {}),
+        ...(status ? { state: status } : {}),
+        ...(seconds !== undefined ? { seconds } : {}),
+        ...(report ?? error ? { detail: report ?? error } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * The schedule list, in the protocol's shape.
+ *
+ * The team tool answers with a bare array of schedules. Its `next_run` and
+ * `last_run` are ISO timestamps and the trigger is either a `time` or an
+ * `every_minutes`, while the protocol carries epoch milliseconds and one `spec`.
+ *
+ * @param {any} data
+ */
+function normaliseSchedules(data) {
+  const list = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.schedules)
+      ? data.schedules
+      : [];
+  const rest = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  return {
+    ...rest,
+    schedules: list.map((schedule) => {
+      if (!schedule || typeof schedule !== 'object') return schedule;
+      const {
+        schedule_id: scheduleId,
+        bot_id: botId,
+        time,
+        every_minutes: everyMinutes,
+        next_run: nextRun,
+        last_run: lastRun,
+        ...fields
+      } = schedule;
+      const spec = time ?? (everyMinutes === undefined ? undefined : String(everyMinutes));
+      return {
+        ...fields,
+        ...(scheduleId !== undefined ? { scheduleId } : {}),
+        ...(botId ? { targetBotId: botId } : {}),
+        ...(spec !== undefined ? { spec } : {}),
+        ...(nextRun ? { nextRunAt: toEpoch(nextRun) } : {}),
+        ...(lastRun ? { lastRunAt: toEpoch(lastRun) } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * Normalises a tool's answer into the protocol's shape.
+ *
+ * Each tool answers in its own way: the task tools answer with an object, the
+ * helper and schedule tools with a bare array. The phone only ever sees one shape.
+ *
+ * @param {string} toolName
+ * @param {any} data
+ */
+function normaliseResult(toolName, data) {
+  switch (toolName) {
+    case 'dispatch_tasks':
+    case 'get_tasks':
+    case 'cancel_tasks':
+      return normaliseTasks(data);
+    case 'list_helpers':
+      return normaliseHelpers(data);
+    case 'list_schedules':
+      return normaliseSchedules(data);
+    default:
+      return data;
+  }
+}
+
+/**
+ * An ISO timestamp as epoch milliseconds, or the value itself when it already is one.
+ *
+ * @param {unknown} value
+ */
+function toEpoch(value) {
+  if (typeof value === 'number') return value;
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * A topic key for a memory the client did not file under one.
+ *
+ * The team's memory tool insists on a topic: a memory is either filed under a topic
+ * or replaces an existing entry. The key has to match the tool's own pattern — a
+ * lowercase word, then lowercase letters, digits, dots, dashes and underscores — and
+ * it has to be unique, because writing the same topic twice without the entry's
+ * revision is a conflict.
+ */
+function generateTopicKey() {
+  return `phone.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** How many batches the bridge asks about when it rebuilds the task list. */
+const MAX_BATCHES = 20;
+
+/** How often the team snapshot is retried while the Host prepares the generation. */
+const SNAPSHOT_RETRIES = 12;
+/** The gap between two snapshot attempts. */
+const SNAPSHOT_RETRY_MS = 1500;
+
 export class Bridge {
   /**
    * @param {any} context The Mini App context the Host supplies.
@@ -99,6 +274,9 @@ export class Bridge {
           agentAvailable: this.runner.available,
           teamToolsAvailable: this.tools.available,
           linkedAt: this.linkedAt,
+          // The live catalogue travels with the status, so a client can show which
+          // team tools this desktop can reach without a second round trip.
+          tools: this.tools.catalog,
         });
         if (online) this.replayPending();
       },
@@ -109,7 +287,14 @@ export class Bridge {
     /** @type {Map<string, Map<string, number>>} messageId -> emoji -> count */
     this.reactions = new Map();
     /** @type {Map<string, {promise: Promise<{ok: boolean, value?: unknown, error?: unknown}>, expiresAt: number}>} */
-    this.opCache = new Map();    this.linkedAt = Date.now();
+    this.opCache = new Map();
+    /** @type {string | undefined} */
+    this.snapshotError = undefined;
+    /** @type {number} */
+    this.snapshotAttempts = 0;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.snapshotTimer = undefined;
+    this.linkedAt = Date.now();
   }
 
   async start() {
@@ -152,6 +337,7 @@ export class Bridge {
       agentAvailable: this.runner.available,
       teamToolsAvailable: this.tools.available,
       linkedAt: this.linkedAt,
+      tools: this.tools.catalog,
     });
     void this.publishTeamSnapshot();
   }
@@ -160,16 +346,48 @@ export class Bridge {
   async publishTeamSnapshot() {
     try {
       const team = await this.readTeam();
+      this.snapshotError = undefined;
+      this.snapshotAttempts = 0;
       this.emit('evt.team_snapshot', {
         ...team,
         diagnostics: this.diagnostics(),
         tools: this.tools.catalog,
       });
+      return true;
     } catch (error) {
-      this.logger.warn('team snapshot failed', {
-        message: error instanceof Error ? error.message : String(error),
+      // The reason travels with the diagnostics, so the phone can say what is wrong
+      // instead of showing an empty team with no explanation.
+      this.snapshotError = error instanceof Error ? error.message : String(error);
+      this.logger.warn('team snapshot failed', { message: this.snapshotError });
+      this.emit('evt.bridge_status', {
+        desktopOnline: true,
+        agentAvailable: this.runner.available,
+        teamToolsAvailable: this.tools.available,
+        linkedAt: this.linkedAt,
+        tools: this.tools.catalog,
+        diagnostics: this.diagnostics(),
       });
+      this.scheduleSnapshotRetry();
+      return false;
     }
+  }
+
+  /**
+   * Retries the team snapshot while the Host is still preparing this generation.
+   *
+   * The Host activates a Mini App's MCP server and binds its tools to the current
+   * generation; until that has happened a tool call is refused as unavailable. The
+   * bridge therefore keeps trying for a short while instead of leaving the phone
+   * with an empty team.
+   */
+  scheduleSnapshotRetry() {
+    this.snapshotAttempts += 1;
+    if (this.snapshotAttempts > SNAPSHOT_RETRIES) return;
+    this.snapshotTimer = setTimeout(() => {
+      this.snapshotTimer = undefined;
+      void this.publishTeamSnapshot();
+    }, SNAPSHOT_RETRY_MS);
+    this.snapshotTimer.unref?.();
   }
 
   // -- inbound -------------------------------------------------------------
@@ -277,6 +495,21 @@ export class Bridge {
         const team = await this.readTeam();
         return { ...team, diagnostics: this.diagnostics() };
       }
+      case 'op.list_tasks': {
+        // The team's task tool answers for one batch or one task at a time — there is
+        // no "list everything" call. A client that names one gets that one; a client
+        // that names neither gets every batch the bridge has seen.
+        if (payload.taskId || payload.batchId) return this.callTool('get_tasks', payload);
+        return this.listKnownTasks();
+      }
+      case 'op.remember': {
+        // A memory is filed under a topic or replaces an entry; the team refuses one
+        // with neither. A note the phone asks to remember gets its own topic.
+        const request = { ...payload };
+        if (!request.key && !request.replaceId) request.key = generateTopicKey();
+        const result = await this.callTool('remember', request);
+        return { ...result, key: request.key ?? result.key };
+      }
       default: {
         const toolName = OP_TOOL[type];
         if (!toolName) {
@@ -353,18 +586,78 @@ export class Bridge {
       );
     }
     if (result.isError === true) {
-      throw codedError('TOOL_REPORTED_ERROR', 'The team tool reported an error.', false);
+      // The tool ran and failed; its own wording is kept, because that is what tells
+      // the user what went wrong.
+      throw codedError(
+        'TOOL_REPORTED_ERROR',
+        result.message ?? `The ${toolName} tool reported an error.`,
+        false,
+        { tool: toolName },
+      );
     }
+
+    const data = extractData(result);
+    const normalised = normaliseResult(toolName, data);
+    // A batch the team reported is remembered, so the task list can be rebuilt later.
+    const batchId = normalised?.batchId ?? normalised?.batch_id;
+    if (batchId) this.ledger.rememberBatch(String(batchId));
 
     await this.ledger.persist();
 
-    const data = extractData(result);
     return {
       tool: toolName,
       content: result.content,
       structuredContent: result.structuredContent,
-      data,
-      ...(data && typeof data === 'object' && !Array.isArray(data) ? data : {}),
+      data: normalised,
+      ...(normalised && typeof normalised === 'object' && !Array.isArray(normalised) ? normalised : {}),
+    };
+  }
+
+  /**
+   * Rebuilds the task list from the batches the bridge knows.
+   *
+   * The team's task tool answers for one batch at a time, so a list is assembled by
+   * asking about each batch in turn. The list is therefore never complete: a task
+   * the team dispatched without the bridge is invisible to the phone, and the answer
+   * says so.
+   */
+  async listKnownTasks() {
+    const batches = this.ledger.batches();
+    if (batches.length === 0) {
+      return {
+        tasks: [],
+        batchIds: [],
+        partial: true,
+        note: 'The team tool answers for one batch at a time, so the list only covers the work the bridge dispatched.',
+      };
+    }
+
+    /** @type {any[]} */
+    const tasks = [];
+    const seen = new Set();
+    for (const batchId of batches.slice(-MAX_BATCHES)) {
+      try {
+        const result = await this.callTool('get_tasks', { batchId });
+        for (const task of result.tasks ?? []) {
+          const id = task?.taskId ?? task?.task_id;
+          if (id && seen.has(id)) continue;
+          if (id) seen.add(id);
+          tasks.push(task);
+        }
+      } catch (error) {
+        // One batch the team no longer knows must not hide the others.
+        this.logger.warn('batch query failed', {
+          batchId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      tasks,
+      batchIds: batches,
+      partial: true,
+      note: 'The team tool answers for one batch at a time, so the list only covers the work the bridge dispatched.',
     };
   }
 
@@ -374,8 +667,7 @@ export class Bridge {
    * The team tool reports the roster in its own shape; the mapping into the
    * protocol's shape happens here, so the phone only ever sees one shape.
    */
-  async readTeam() {
-    const result = await this.tools.call('list_team', {});
+  async readTeam() {    const result = await this.tools.call('list_team', {});
     const data = extractData(result) ?? {};
     const bots = Array.isArray(data.bots) ? data.bots.map(mapBot) : [];
     const idByName = new Map(bots.map((bot) => [bot.name, bot.botId]));
@@ -390,7 +682,7 @@ export class Bridge {
       toolCount: this.tools.catalog.length,
       partial: this.tools.partial,
       linkedAt: this.linkedAt,
-      reason: this.tools.reason,
+      reason: this.snapshotError ?? this.tools.reason,
     };
   }
 

@@ -11,6 +11,48 @@ const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const MAX_QUEUE = 200;
 
 /**
+ * The relay address, in the form each transport needs.
+ *
+ * The pairing request is an HTTP POST and the frame channel is a WebSocket, but the
+ * operator is given a single address and the scheme they type must not decide which
+ * one works: a `wss://` address cannot be fetched — `fetch` refuses a scheme that is
+ * not HTTP — and an `http://` address is not a WebSocket URL. The two are translated
+ * into each other instead.
+ *
+ * The translations are string operations on purpose: the same rule has to hold in a
+ * browser, where `URL` is not a real URL parser.
+ */
+
+const TO_HTTP = {
+  'http:': 'http:',
+  'https:': 'https:',
+  'ws:': 'http:',
+  'wss:': 'https:',
+};
+
+const TO_WS = {
+  'http:': 'ws:',
+  'https:': 'wss:',
+  'ws:': 'ws:',
+  'wss:': 'wss:',
+};
+
+/**
+ * @param {string} url
+ * @param {Record<string, string>} schemes
+ * @returns {string}
+ */
+function translate(url, schemes) {
+  const trimmed = String(url).trim().replace(/\/+$/, '');
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(trimmed);
+  if (!match) return trimmed;
+  const scheme = match[1].toLowerCase();
+  const target = schemes[scheme];
+  if (!target) return trimmed;
+  return target + trimmed.slice(scheme.length);
+}
+
+/**
  * @typedef {object} RelayLogger
  * @property {(message: string, meta?: unknown) => void} info
  * @property {(message: string, meta?: unknown) => void} warn
@@ -58,8 +100,18 @@ export class RelayClient {
     return Boolean(this.url && this.accountId && this.bridgeId && this.token);
   }
 
+  /** The relay address as an HTTP origin, for the REST calls. */
+  httpUrl() {
+    return translate(this.url ?? '', TO_HTTP);
+  }
+
+  /** The relay address as a WebSocket origin, for the frame channel. */
+  wsUrl() {
+    return translate(this.url ?? '', TO_WS);
+  }
+
   endpoint() {
-    const base = String(this.url).replace(/\/+$/, '');
+    const base = this.wsUrl();
     const params = new URLSearchParams({
       role: 'bridge',
       subject: this.bridgeId,
@@ -189,12 +241,14 @@ export class RelayClient {
    *
    * The code is shown on the desktop and typed into the phone. It is single use and
    * short-lived, so it is never persisted by the bridge.
+   *
+   * @returns {Promise<{ code: string, expiresAt: number }>}
    */
   async createPairingCode() {
     if (!this.configured) {
       throw new Error('The relay is not configured yet.');
     }
-    const base = String(this.url).replace(/\/+$/, '');
+    const base = this.httpUrl();
     const response = await fetch(`${base}/r/${encodeURIComponent(this.accountId)}/pair/code`, {
       method: 'POST',
       headers: {
@@ -206,13 +260,14 @@ export class RelayClient {
     if (!response.ok) {
       throw new Error(`The relay refused the pairing request (${response.status}).`);
     }
-    return response.json();
+    const body = /** @type {{ code: string, expiresAt: number }} */ (await response.json());
+    return body;
   }
 
   /** Lists the devices paired with this bridge. */
   async listDevices() {
     if (!this.configured) return [];
-    const base = String(this.url).replace(/\/+$/, '');
+    const base = this.httpUrl();
     const response = await fetch(`${base}/r/${encodeURIComponent(this.accountId)}/devices`, {
       headers: { authorization: `Bearer ${this.token}` },
     });
@@ -224,7 +279,7 @@ export class RelayClient {
   /** Revokes a paired device. */
   async revokeDevice(deviceId) {
     if (!this.configured) return false;
-    const base = String(this.url).replace(/\/+$/, '');
+    const base = this.httpUrl();
     const response = await fetch(
       `${base}/r/${encodeURIComponent(this.accountId)}/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE', headers: { authorization: `Bearer ${this.token}` } },
