@@ -16,6 +16,54 @@ import { createFrame, isValidClientMessageId, newId } from './protocol/index.js'
 const OP_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const HISTORY_LIMIT = 200;
 
+/**
+ * Maps one Bot from the team tool's shape to the protocol's shape.
+ *
+ * The team tool reports `bot_id` and `main`; the protocol the phone speaks uses
+ * `botId` and `isMain`. The tool also reports the model as `provider/model`, which
+ * is kept as it is: a phone that shows "custom_provider:ollama-cloud/muse-spark-open"
+ * is telling the truth about which model the Bot runs on.
+ *
+ * @param {any} bot
+ * @returns {{botId: string, name: string, role?: string, model?: string, isMain: boolean}}
+ */
+function mapBot(bot) {
+  return {
+    botId: String(bot?.bot_id ?? bot?.botId ?? ''),
+    name: String(bot?.name ?? ''),
+    role: bot?.role ? String(bot.role) : undefined,
+    model: bot?.model ? String(bot.model) : undefined,
+    isMain: bot?.main === true || bot?.isMain === true,
+  };
+}
+
+/**
+ * Maps one group from the team tool's shape to the protocol's shape.
+ *
+ * The tool reports the group's members and its admin by *name*, while the protocol
+ * carries ids, so the names are resolved against the roster. A name that is not in
+ * the roster is kept as it is rather than dropped, so a member is never lost.
+ *
+ * @param {any} group
+ * @param {Map<string, string>} idByName Bot name to bot id.
+ */
+function mapGroup(group, idByName) {
+  const members = Array.isArray(group?.members)
+    ? group.members
+    : Array.isArray(group?.memberIds)
+      ? group.memberIds
+      : [];
+  const adminName = group?.admin ? String(group.admin) : '';
+  return {
+    groupId: String(group?.group_id ?? group?.groupId ?? ''),
+    name: String(group?.name ?? ''),
+    notice: group?.notice ? String(group.notice) : undefined,
+    admin: idByName.get(adminName) ?? adminName,
+    memberIds: members.map((member) => idByName.get(String(member)) ?? String(member)),
+    replyMode: group?.reply_mode === 'all' || group?.replyMode === 'all' ? 'all' : 'admin',
+  };
+}
+
 export class Bridge {
   /**
    * @param {any} context The Mini App context the Host supplies.
@@ -320,14 +368,19 @@ export class Bridge {
     };
   }
 
-  /** Reads the team roster, preferring the tool's structured output. */
+  /**
+   * Reads the team roster, preferring the tool's structured output.
+   *
+   * The team tool reports the roster in its own shape; the mapping into the
+   * protocol's shape happens here, so the phone only ever sees one shape.
+   */
   async readTeam() {
     const result = await this.tools.call('list_team', {});
     const data = extractData(result) ?? {};
-    return {
-      bots: Array.isArray(data.bots) ? data.bots : [],
-      groups: Array.isArray(data.groups) ? data.groups : [],
-    };
+    const bots = Array.isArray(data.bots) ? data.bots.map(mapBot) : [];
+    const idByName = new Map(bots.map((bot) => [bot.name, bot.botId]));
+    const groups = Array.isArray(data.groups) ? data.groups.map((group) => mapGroup(group, idByName)) : [];
+    return { bots, groups };
   }
 
   diagnostics() {

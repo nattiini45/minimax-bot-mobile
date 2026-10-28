@@ -12,7 +12,7 @@ const TEAM_SERVER_HINT = 'minimax-bot';
 
 /** Candidate property names for each operation field, most likely first. */
 const ALIASES = {
-  botId: ['botId', 'bot_id', 'to', 'target', 'targetBotId', 'bot'],
+  botId: ['botId', 'bot_id', 'target_bot', 'to', 'target', 'targetBotId', 'bot'],
   botIds: ['botIds', 'bot_ids', 'bots', 'to', 'targets'],
   text: ['text', 'message', 'content', 'prompt'],
   prompt: ['prompt', 'text', 'message', 'task', 'content', 'instruction'],
@@ -23,7 +23,7 @@ const ALIASES = {
   turnId: ['turnId', 'turn_id', 'id', 'sessionId'],
   task: ['task', 'prompt', 'message', 'content', 'instruction', 'description'],
   id: ['id', 'memoryId', 'entryId', 'scheduleId', 'groupId', 'botId'],
-  groupId: ['groupId', 'group_id', 'id'],
+  groupId: ['groupId', 'group_id', 'group', 'id'],
   query: ['query', 'q', 'search', 'text'],
   limit: ['limit', 'count', 'max', 'top'],
   days: ['days', 'span', 'range'],
@@ -40,7 +40,7 @@ const ALIASES = {
   main: ['main', 'isMain', 'is_main'],
   kind: ['kind', 'type', 'scheduleKind', 'schedule_kind'],
   spec: ['spec', 'time', 'at', 'everyMinutes', 'every_minutes', 'cron', 'schedule'],
-  targetBotId: ['targetBotId', 'target_bot_id', 'botId', 'bot_id', 'to'],
+  targetBotId: ['targetBotId', 'target_bot_id', 'target_bot', 'botId', 'bot_id', 'to'],
   enabled: ['enabled', 'active'],
   chatId: ['chatId', 'chat_id'],
   mentions: ['mentions', 'mentionIds', 'at'],
@@ -52,6 +52,15 @@ const ALIASES = {
   emoji: ['emoji', 'reaction'],
   role_: ['role', 'title'],
 };
+
+/**
+ * Properties the team fills in itself.
+ *
+ * Every team tool advertises `caller_bot_id`, and some of them list it as required,
+ * but the server is the one that knows which Bot is calling. The bridge never sends
+ * it, so it is never treated as a missing argument.
+ */
+const SERVER_SUPPLIED = ['caller_bot_id'];
 
 /**
  * Which team tool backs each operation.
@@ -170,7 +179,9 @@ export function buildToolArguments(payload, schema) {
   // the tool decides whether they are required.
 
   const required = Array.isArray(schema.required) ? schema.required : [];
-  const missing = required.filter((property) => !(property in args));
+  const missing = required.filter(
+    (property) => !(property in args) && !SERVER_SUPPLIED.includes(property),
+  );
   if (missing.length > 0) {
     throw new ToolArgumentError(
       `Missing required argument${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`,

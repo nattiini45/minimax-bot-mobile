@@ -53,6 +53,19 @@ describe('the team snapshot', () => {
     expect(state.diagnostics.toolCount).toBe(22);
     expect(state.tools).toHaveLength(1);
   });
+
+  it('does not let a group without members take the screen down', () => {
+    useAppStore.getState().applyFrame(
+      event('evt.team_snapshot', {
+        bots: [{ botId: 'b1', name: 'Writer' }],
+        groups: [{ groupId: 'g1', name: 'Team' }],
+        diagnostics: { agentAvailable: true, teamToolsAvailable: true, toolCount: 1, partial: false },
+        tools: [],
+      }),
+    );
+
+    expect(useAppStore.getState().groups[0]?.memberIds).toEqual([]);
+  });
 });
 
 describe('streaming a reply', () => {

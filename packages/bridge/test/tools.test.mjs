@@ -24,6 +24,100 @@ test('keeps a property whose name matches exactly', () => {
   assert.deepEqual(args, { title: 'Digest' });
 });
 
+/*
+ * The schemas below are the ones the real `@minimax-bot` team tools advertise. They
+ * are copied from the tool catalogue rather than invented, because the whole point of
+ * mapping the payload onto the live schema is that the two agree.
+ */
+
+test('a memory tool that names its target bot receives it', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+      limit: { type: 'integer' },
+      scope: { type: 'string', enum: ['self', 'team', 'bot'] },
+      target_bot: { type: 'string' },
+    },
+  };
+  const args = buildToolArguments({ botId: 'bot_b1', query: 'changelog', limit: 5 }, schema);
+  assert.deepEqual(args, { query: 'changelog', limit: 5, target_bot: 'bot_b1' });
+});
+
+test('a group tool that names its group receives it', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      group: { type: 'string' },
+      name: { type: 'string' },
+      members: { type: 'array', items: { type: 'string' } },
+      reply_mode: { type: 'string', enum: ['admin', 'all'] },
+    },
+    required: ['group'],
+  };
+  const args = buildToolArguments(
+    { groupId: 'grp_g1', name: 'Studio', memberIds: ['bot_b1'], replyMode: 'admin' },
+    schema,
+  );
+  assert.deepEqual(args, {
+    group: 'grp_g1',
+    name: 'Studio',
+    members: ['bot_b1'],
+    reply_mode: 'admin',
+  });
+});
+
+test('a bot tool that names its bot receives it', () => {
+  const schema = {
+    type: 'object',
+    properties: { bot: { type: 'string' }, name: { type: 'string' }, main: { type: 'boolean' } },
+    required: ['bot'],
+  };
+  const args = buildToolArguments({ botId: 'bot_b1', name: 'Writer', main: true }, schema);
+  assert.deepEqual(args, { bot: 'bot_b1', name: 'Writer', main: true });
+});
+
+test('the caller the team fills in itself is never a missing argument', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      caller_bot_id: { type: 'string', minLength: 1 },
+      task: { type: 'string' },
+      title: { type: 'string' },
+    },
+    required: ['caller_bot_id', 'task'],
+  };
+  const args = buildToolArguments({ task: 'do the thing', title: 'Thing' }, schema);
+  assert.deepEqual(args, { task: 'do the thing', title: 'Thing' });
+});
+
+test('a schedule tool receives the time its kind asks for', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string' },
+      name: { type: 'string' },
+      kind: { type: 'string', enum: ['daily', 'interval', 'once'] },
+      time: { type: 'string' },
+      every_minutes: { type: 'integer' },
+      in_minutes: { type: 'integer' },
+      target_bot: { type: 'string' },
+    },
+    required: ['prompt', 'kind'],
+  };
+  const args = buildToolArguments(
+    { prompt: 'write the notes', name: 'Notes', kind: 'daily', spec: '09:00', targetBotId: 'bot_b1' },
+    schema,
+  );
+  assert.deepEqual(args, {
+    prompt: 'write the notes',
+    name: 'Notes',
+    kind: 'daily',
+    time: '09:00',
+    target_bot: 'bot_b1',
+  });
+});
+
 test('refuses when a required property cannot be satisfied', () => {
   const schema = {
     type: 'object',

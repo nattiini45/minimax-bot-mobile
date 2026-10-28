@@ -517,9 +517,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     switch (frame.type) {
       case 'evt.team_snapshot': {
+        // A group without members must not take the screen down with it, so the
+        // roster is normalised before anything renders.
+        const bots = Array.isArray(p.bots) ? (p.bots as AppBot[]) : [];
+        const groups = Array.isArray(p.groups)
+          ? (p.groups as AppGroup[]).map((group) => ({
+              ...group,
+              memberIds: Array.isArray(group.memberIds) ? group.memberIds : [],
+            }))
+          : [];
         set({
-          bots: p.bots ?? [],
-          groups: p.groups ?? [],
+          bots,
+          groups,
           tools: p.tools ?? [],
           diagnostics: p.diagnostics ?? state.diagnostics,
         });

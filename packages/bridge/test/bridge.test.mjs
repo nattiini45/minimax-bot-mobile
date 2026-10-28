@@ -48,9 +48,29 @@ async function makeBridge({ tools = TEAM_TOOLS, agent = true } = {}) {
             content: [
               {
                 type: 'text',
+                // The shape the real team tool answers in: `bot_id`, `main`, members
+                // and admin by name, `reply_mode`.
                 text: JSON.stringify({
-                  bots: [{ botId: 'b1', name: 'Writer' }],
-                  groups: [{ groupId: 'g1', name: 'Team', memberIds: ['b1'] }],
+                  bots: [
+                    {
+                      bot_id: 'bot_b1',
+                      name: 'Writer',
+                      role: 'Long-form drafting',
+                      main: false,
+                      model: 'minimax/MiniMax-M3.1-Flash',
+                      effort: 'default',
+                    },
+                  ],
+                  groups: [
+                    {
+                      group_id: 'grp_g1',
+                      name: 'Team',
+                      notice: 'The whole team.',
+                      admin: 'Writer',
+                      members: ['Writer'],
+                      reply_mode: 'admin',
+                    },
+                  ],
                 }),
               },
             ],
@@ -147,6 +167,67 @@ test('list_team returns the roster and the diagnostics', async () => {
   assert.equal(result.bots[0].name, 'Writer');
   assert.equal(result.groups.length, 1);
   assert.equal(result.diagnostics.toolCount, 3);
+  await dispose();
+});
+
+test('the roster is mapped into the shape the protocol speaks', async () => {
+  const { bridge, dispose } = await makeBridge();
+  const result = /** @type {TeamResult} */ (await bridge.dispatch('op.list_team', {}));
+
+  // The team tool answers in its own shape; the phone must only ever see the
+  // protocol's shape, whatever the tool said.
+  assert.equal(result.bots[0].botId, 'bot_b1');
+  assert.equal(result.bots[0].isMain, false);
+  assert.equal(result.bots[0].role, 'Long-form drafting');
+  assert.equal(result.bots[0].model, 'minimax/MiniMax-M3.1-Flash');
+
+  assert.equal(result.groups[0].groupId, 'grp_g1');
+  assert.equal(result.groups[0].notice, 'The whole team.');
+  assert.equal(result.groups[0].replyMode, 'admin');
+  // The tool names the admin and the members; the protocol carries ids.
+  assert.equal(result.groups[0].admin, 'bot_b1');
+  assert.deepEqual(result.groups[0].memberIds, ['bot_b1']);
+  await dispose();
+});
+
+test('a main Bot is marked as the main one', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.tools.call = async () => ({
+    ok: true,
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          bots: [{ bot_id: 'bot_b1', name: 'Writer', main: true }],
+          groups: [],
+        }),
+      },
+    ],
+  });
+
+  const result = /** @type {TeamResult} */ (await bridge.dispatch('op.list_team', {}));
+  assert.equal(result.bots[0].isMain, true);
+  await dispose();
+});
+
+test('a member the roster does not know is kept rather than dropped', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.tools.call = async () => ({
+    ok: true,
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          bots: [{ bot_id: 'bot_b1', name: 'Writer' }],
+          groups: [{ group_id: 'grp_g1', name: 'Team', admin: 'Ghost', members: ['Writer', 'Ghost'] }],
+        }),
+      },
+    ],
+  });
+
+  const result = /** @type {TeamResult} */ (await bridge.dispatch('op.list_team', {}));
+  assert.deepEqual(result.groups[0].memberIds, ['bot_b1', 'Ghost']);
+  assert.equal(result.groups[0].admin, 'Ghost');
   await dispose();
 });
 
