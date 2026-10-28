@@ -8,6 +8,10 @@ chats, dispatch, tasks, helpers, memory, schedules, usage, approvals — in the
 MiniMax design language, with the interaction quality you would expect from a
 native app.
 
+> Built with **M3.1 Flash** in **MiniMax Code**. The engineering diary — the six
+> real bugs the model found by working against a live team — is in
+> [`docs/CREATION-NOTE.md`](docs/CREATION-NOTE.md).
+
 ```
 ┌──────────────────────────┐
 │  PHONE                   │  apps/app — Expo / React Native
@@ -180,14 +184,17 @@ Two runner notes, both verified on Node 24:
 | Suite | Count | Runner |
 |---|---|---|
 | `packages/protocol` | 29 | vitest |
-| `packages/relay` | 32 | vitest |
-| `packages/bridge` | 72 | node:test |
-| `apps/app` | 25 | jest + jest-expo |
+| `packages/relay` | 33 | vitest |
+| `packages/bridge` | 74 | node:test |
+| `apps/app` | 32 | jest + jest-expo |
 
 ## What the phone can do
 
 - **Chats** with any Bot or group, with streaming deltas, tool activity, reactions
   and history.
+- **A live trace of the team's work.** The bridge reports every tool the team runs
+  while it answers, and the client shows them as they happen: which tool, how long
+  it took, and whether it failed. A reply is a visible process, not a long silence.
 - **Teams** — create, update and delete Bots and groups; main-Bot administration.
 - **Dispatch** — fan a prompt out to several Bots and watch the tasks land.
 - **Tasks and helpers** — start background work, stop it, follow its state.
@@ -196,6 +203,20 @@ Two runner notes, both verified on Node 24:
 - **Approvals** — answer a permission request (`allowOnce` / `deny`) or a
   questionnaire from the phone.
 - **Usage** — turns, characters, tool calls and errors, per bucket and per Bot.
+
+## Try it in a browser
+
+The client is an Expo app, so the same code runs as a PWA:
+
+```bash
+npm run build
+npm run export:web     # apps/app/dist
+npm run app            # or: npm run web --workspace apps/app
+```
+
+Pair it with the relay address and the six-digit code from the MiniMax Bot Bridge
+window. Nothing about the browser build is a demo mode: it is the same client, the
+same relay and the same team.
 
 ## Two limits worth knowing
 
