@@ -13,6 +13,25 @@
 
 export const PROTOCOL_VERSION = 1 as const;
 
+/**
+ * The WebSocket close codes the relay uses to say why a peer was refused.
+ *
+ * The relay accepts the upgrade first and closes the socket with one of these, so
+ * the peer learns *why* it was refused. Answering the handshake with an HTTP error
+ * instead would hide the reason behind a generic "connection failed" — a phone that
+ * had been unpaired cannot tell that apart from a relay that is simply down.
+ */
+export const CLOSE_CODE = {
+  /** The credential was not accepted. */
+  unauthorized: 4001,
+  /** Another peer took this peer's place. */
+  replaced: 4000,
+  /** The device was unpaired on the desktop. */
+  deviceRevoked: 4003,
+} as const;
+
+export type CloseCode = (typeof CLOSE_CODE)[keyof typeof CLOSE_CODE];
+
 /** Who produced a frame. */
 export type Role = 'app' | 'bridge' | 'relay';
 
@@ -104,7 +123,23 @@ export interface ChatMessage {
   pending?: boolean;
 }
 
-export type TaskState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+/**
+ * The state of a dispatched task.
+ *
+ * These are the states the team's task dispatcher actually reports. A phone that
+ * showed a narrower set would have to guess what "waiting_for_tasks" means, so the
+ * protocol carries the team's vocabulary instead of a lossy summary of it.
+ */
+export type TaskState =
+  | 'queued'
+  | 'running'
+  | 'waiting_for_tasks'
+  | 'waiting_for_user'
+  | 'paused'
+  | 'unknown'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
 
 export interface Task {
   taskId: string;
@@ -115,15 +150,38 @@ export interface Task {
   createdAt: number;
   updatedAt: number;
   error?: string;
+  /** The batch this task was dispatched in. */
+  batchId?: string;
+  /** `bot` or `discussion`. */
+  kind?: string;
+  chatId?: string;
+  /** The message the task's answer was committed as. */
+  resultMessageId?: string;
+  /** The task's answer, when the team has produced one. */
+  result?: string;
 }
+
+/** The state of a background helper. */
+export type HelperState =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'stopped'
+  | 'interrupted'
+  | 'blocked';
 
 export interface Helper {
   helperId: string;
   title?: string;
-  state: 'running' | 'stopped' | 'error';
+  state: HelperState;
   lastRunAt?: number;
   nextRunAt?: number;
   detail?: string;
+  /** The Bot the helper runs for, by name. */
+  bot?: string;
+  /** How long the helper ran, in seconds. */
+  seconds?: number;
 }
 
 export interface MemoryEntry {
@@ -276,16 +334,47 @@ export interface OpDispatch {
   botIds: string[];
   prompt: string;
   title?: string;
+  /**
+   * The idempotency key the team uses to de-duplicate a dispatch.
+   *
+   * The bridge generates one when the client does not supply it, so a retry of the
+   * same request never creates a second batch.
+   */
+  requestId?: string;
 }
 
 export interface OpDispatchResult {
   taskIds: string[];
+  batchId?: string;
+  requestId?: string;
+  complete?: boolean;
 }
 
-export interface OpListTasks {}
+/**
+ * A task query.
+ *
+ * The team's task tool answers for one batch or one task at a time — there is no
+ * "list everything" call. A client that wants the whole picture names the batch it
+ * is interested in; a client that names neither gets every batch the bridge knows.
+ */
+export interface OpListTasks {
+  taskId?: string;
+  batchId?: string;
+  /** How long the team may wait for the tasks to settle, up to 20 000 ms. */
+  waitMs?: number;
+  /** Where in the answer to start reading. */
+  resultOffset?: number;
+}
 
 export interface OpListTasksResult {
   tasks: Task[];
+  /** The batches the answer was read from. */
+  batchIds?: string[];
+  /**
+   * True when the list only covers the batches the bridge has seen, which is the
+   * case whenever the team dispatched work without the bridge.
+   */
+  partial?: boolean;
 }
 
 export interface OpCancelTask {
@@ -312,15 +401,45 @@ export interface OpRecall {
   botId: string;
   query: string;
   limit?: number;
+  /** The topic to read, when the client is looking for one specific topic. */
+  key?: string;
+  offset?: number;
+  textOffset?: number;
+  scope?: MemoryScope;
 }
 
 export interface OpRecallResult {
   entries: MemoryEntry[];
 }
 
+/** Where a memory lives. */
+export type MemoryScope = 'self' | 'team' | 'bot';
+
 export interface OpRemember {
+  /** The Bot the memory belongs to. Required: without a caller, "self" needs a target. */
   botId: string;
   text: string;
+  /**
+   * The topic the memory is filed under.
+   *
+   * The team's memory tool insists on a topic: a memory is either filed under a
+   * topic or replaces an existing entry. The bridge generates a topic when the
+   * client does not name one.
+   */
+  key?: string;
+  /** The entry to replace, instead of filing under a topic. */
+  replaceId?: string;
+  scope?: MemoryScope;
+  pinned?: boolean;
+  source?: string;
+}
+
+export interface OpRememberResult {
+  /** The id of the entry that was written. */
+  id?: string;
+  /** The topic it was filed under. */
+  key?: string;
+  scope?: string;
 }
 
 export interface OpForget {
@@ -454,7 +573,6 @@ export interface OpPayloadMap {
 // ---------------------------------------------------------------------------
 // Events: bridge -> app
 // ---------------------------------------------------------------------------
-
 export interface EvtTeamSnapshot {
   bots: Bot[];
   groups: Group[];

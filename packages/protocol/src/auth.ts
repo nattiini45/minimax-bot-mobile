@@ -4,9 +4,15 @@
  * The relay never holds a MiniMax account credential. It issues device-scoped tokens
  * signed with a shared HMAC key, and the bridge signs its own token the same way. Both
  * sides only need to prove they are who the relay paired them as.
+ *
+ * This lives in the shared protocol package rather than in the relay because the
+ * token format is a contract between three runtimes: the relay issues and verifies
+ * device tokens, the desktop presents a bridge token, and an operator has to mint
+ * that bridge token from the same secret. It is also deliberately free of any
+ * Node-only API, so it runs unchanged in the browser, in a Worker and in a script.
  */
 
-export type PeerRole = 'bridge' | 'device';
+import type { PeerRole } from './pairing.js';
 
 export interface TokenPayload {
   v: 1;
@@ -26,27 +32,19 @@ function base64UrlEncode(bytes: Uint8Array): string {
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  const base64 =
-    typeof btoa === 'function'
-      ? btoa(binary)
-      : Buffer.from(bytes).toString('base64');
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function base64UrlDecode(value: string): Uint8Array<ArrayBuffer> {
+function base64UrlDecode(value: string): ArrayBuffer {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/');
   const base64 = padded + '='.repeat((4 - (padded.length % 4)) % 4);
-  if (typeof atob === 'function') {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
   }
-  // Copy into a fresh ArrayBuffer: `Buffer` is backed by `ArrayBufferLike`, which the
-  // WebCrypto `BufferSource` overloads reject.
-  return new Uint8Array(Buffer.from(base64, 'base64'));
+  // `new Uint8Array(n)` always allocates a plain ArrayBuffer, never a SharedArrayBuffer.
+  return bytes.buffer as ArrayBuffer;
 }
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
