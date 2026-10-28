@@ -7,16 +7,29 @@
  * its own, because a frame queued in two places is a frame sent twice.
  */
 
-import { createFrame, type Frame } from '@minimax-bot/protocol';
+import { CLOSE_CODE, createFrame, type Frame } from '@minimax-bot/protocol';
 
 import { relayWsUrl } from './relay-url';
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
 /** Close codes the relay uses for a socket it will never serve again. */
-export const CLOSE_UNAUTHORIZED = 4001;
-export const CLOSE_DEVICE_REVOKED = 4003;
-export const CLOSE_REPLACED = 4000;
+export const CLOSE_UNAUTHORIZED = CLOSE_CODE.unauthorized;
+export const CLOSE_DEVICE_REVOKED = CLOSE_CODE.deviceRevoked;
+export const CLOSE_REPLACED = CLOSE_CODE.replaced;
+
+/**
+ * Whether a failed handshake was a refusal of the credential.
+ *
+ * The relay accepts the upgrade and closes the socket with the reason, so this is a
+ * safety net for a relay that answers the handshake with an HTTP error instead: React
+ * Native does not surface the status code, only the message, so the message is what
+ * there is to go on. Without this the phone would retry a credential the relay has
+ * already refused, and the user would only ever see "offline".
+ */
+function looksLikeRefusal(message: string): boolean {
+  return /\b401\b|unauthori[sz]ed|forbidden/i.test(message);
+}
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -40,6 +53,10 @@ export class RelayClient {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq = 0;
   private options: RelayClientOptions;
+  /** True once a socket has completed its handshake. */
+  private opened = false;
+  /** True when the last handshake failed because the credential was refused. */
+  private refused = false;
 
   constructor(options: RelayClientOptions) {
     this.options = options;
@@ -68,6 +85,8 @@ export class RelayClient {
   connect(): void {
     if (this.closed) return;
     this.setStatus('connecting');
+    this.opened = false;
+    this.refused = false;
 
     const socket = new WebSocket(this.endpoint());
     this.socket = socket;
@@ -75,6 +94,8 @@ export class RelayClient {
     socket.onopen = () => {
       // The backoff is only reset once the handshake completes. A relay that accepts the
       // socket and then drops it would otherwise be retried every second, forever.
+      this.opened = true;
+      this.refused = false;
       this.setStatus('online');
     };
 
@@ -113,11 +134,20 @@ export class RelayClient {
         this.options.onFatal?.(event.code);
         return;
       }
+      // The handshake never completed and the relay refused the credential outright.
+      if (!this.opened && this.refused) {
+        this.closed = true;
+        this.options.onFatal?.(CLOSE_UNAUTHORIZED);
+        return;
+      }
       this.scheduleReconnect();
     };
 
-    socket.onerror = () => {
-      // `onclose` always follows, so the reconnect is scheduled there.
+    socket.onerror = (event) => {
+      // `onclose` always follows, so the reconnect is scheduled there. The message is
+      // kept because a refused handshake only says so here.
+      const message = (event as { message?: string })?.message ?? '';
+      if (message) this.refused = looksLikeRefusal(message);
     };
   }
 

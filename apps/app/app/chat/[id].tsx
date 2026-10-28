@@ -87,6 +87,7 @@ export default function ChatScreen() {
     >
       <FlatList
         ref={listRef}
+        style={styles.listFlex}
         data={thread}
         keyExtractor={(item) => `${item.messageId}-${item.ts}`}
         renderItem={({ item }) => (
@@ -129,6 +130,15 @@ export default function ChatScreen() {
             }}
           />
         </View>
+      ) : null}
+
+      {bot ? (
+        <Text
+          style={[styles.headerLink, { color: theme.colors.muted }]}
+          onPress={() => router.push(`/bot/${bot.botId}`)}
+        >
+          Bot details
+        </Text>
       ) : null}
 
       <View
@@ -174,23 +184,15 @@ export default function ChatScreen() {
           </Text>
         </Pressable>
       </View>
-
-      {bot ? null : null}
-      {group ? null : null}
-      {bot ? (
-        <Text
-          style={[styles.headerLink, { color: theme.colors.muted }]}
-          onPress={() => router.push(`/bot/${bot.botId}`)}
-        >
-          Bot details
-        </Text>
-      ) : null}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
+    flex: 1,
+  },
+  listFlex: {
     flex: 1,
   },
   list: {

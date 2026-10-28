@@ -124,6 +124,7 @@ it is unit tested without a runtime. The Durable Object is a thin adapter over i
 - `npm run typecheck` — every workspace.
 - `npm run export:web` — bundles the app for the PWA target.
 
-The one thing that cannot be verified from a workstation is the live handshake between
-the bridge and a running `@minimax-bot` runtime, because the loopback credential is
-injected by the Host for its own tab only. See `docs/PAIRING.md`.
+The one thing that cannot be driven from a script is the bridge's own HTTP surface,
+because the loopback credential is injected by the Host for its own tab only. The
+live handshake with a running `@minimax-bot` runtime *can* be exercised: the bridge
+reads each tool's schema at runtime and calls the real tools. See `docs/PAIRING.md`.

@@ -164,14 +164,34 @@ rather than hardcoding names. If a call still fails with `INVALID_ARGUMENTS`, th
 response carries the schema and the missing properties — that is the signal to
 extend the alias table in `packages/bridge/miniapp/node/tools.mjs`.
 
-## The one thing that cannot be tested from a workstation
+## What cannot be driven from a script
 
-The live handshake between the bridge and a running `@minimax-bot` runtime. The
-Mini App loopback credential (`x-mavis-miniapp-token`) is issued per WebContents by
-the Electron Host and injected only for the registered tab — it is never written
-to disk. Probing the Mini App server from outside returns HTTP 401, so the live
-tool schemas cannot be introspected externally.
+The bridge's **own** HTTP surface (`/api/session`, `/api/config`) sits behind the
+Host's per-WebContents loopback credential (`x-mavis-miniapp-token`), which is issued
+per WebContents by the Electron Host and injected only for the registered tab — it is
+never written to disk. Probing the Mini App server from outside returns HTTP 401.
 
-That is precisely why the bridge reads `inputSchema` at runtime instead of
-hardcoding parameter names. It is also why the first end-to-end run needs a human:
-open the desktop surface, confirm the catalogue is non-empty, and the rest follows.
+So the bridge cannot be *configured* from a script: the configuration is written into
+the bridge's data directory instead, and the pairing code is requested over the
+relay by a client that holds the bridge token.
+
+Everything else can be driven from a script, and is: the relay accepts a device
+peer, a device peer can send operations, and the bridge answers them by calling the
+real `@minimax-bot` tools. The live tool schemas are read at runtime rather than
+hardcoded for exactly this reason — a script never sees them, and neither should the
+bridge.
+
+## The end-to-end run
+
+The pieces line up like this, and each step has been run against the real thing
+rather than a stand-in:
+
+1. The relay runs (`npm run mint:token` mints a bridge token for it).
+2. The bridge Mini App runs inside MiniMax Code and dials the relay.
+3. The bridge asks the relay for a pairing code; the phone types it in.
+4. The phone asks the bridge for the team roster; the bridge calls `list_team`.
+5. The phone chats with a Bot; the bridge runs the turn through `session.run`.
+
+Steps 4 and 5 are the ones that need a human: the bridge can only be told to call a
+tool from inside the Mini App, and a turn has to be started from the desktop side.
+

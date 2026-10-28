@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Frame } from '@minimax-bot/protocol';
 import { create } from 'zustand';
 
-import { RelayClient, type ConnectionStatus } from '../net/relay-client';
+import { CLOSE_DEVICE_REVOKED, RelayClient, type ConnectionStatus } from '../net/relay-client';
 
 export interface Session {
   relayUrl: string;
@@ -40,6 +40,14 @@ export interface AppState {
 
   messages: Record<string, AppMessage[]>;
   tasks: AppTask[];
+  /**
+   * Why the task list may be incomplete.
+   *
+   * The team's task tool answers for one batch at a time, so a list rebuilt from the
+   * batches the bridge knows never covers work the team dispatched on its own. The
+   * phone says so rather than showing a list that looks complete.
+   */
+  tasksNote: string | null;
   helpers: AppHelper[];
   schedules: AppSchedule[];
   approvals: AppPermission[];
@@ -219,7 +227,10 @@ function applyOperationResult(
       });
       return;
     case 'op.list_tasks':
-      useAppStore.setState({ tasks: Array.isArray(data.tasks) ? data.tasks : state.tasks });
+      useAppStore.setState({
+        tasks: Array.isArray(data.tasks) ? data.tasks : state.tasks,
+        tasksNote: typeof data.note === 'string' ? data.note : null,
+      });
       return;
     case 'op.list_helpers':
       useAppStore.setState({ helpers: Array.isArray(data.helpers) ? data.helpers : state.helpers });
@@ -306,6 +317,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   messages: {},
   tasks: [],
+  tasksNote: null,
   helpers: [],
   schedules: [],
   approvals: [],
@@ -690,9 +702,9 @@ export function connectRelay(session: Session): RelayClient {
       // took its place. The session is dropped so the app asks for a new pairing code
       // instead of retrying forever with a credential that cannot work.
       useAppStore.getState().setError(
-        code === 4003
+        code === CLOSE_DEVICE_REVOKED
           ? 'This phone was unpaired on the desktop. Pair it again there.'
-          : 'The relay refused this phone. Pair it again.',
+          : 'The relay no longer knows this phone — it may have restarted. Pair it again.',
       );
       useAppStore.getState().setSession(null);
       void persistSession(null);

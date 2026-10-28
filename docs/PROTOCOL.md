@@ -66,10 +66,15 @@ the bridge always agree on which tool backs which operation.
 |---|---|---|---|
 | `op.list_team` | `list_team` | — | `{ bots, groups, diagnostics }` |
 | `op.list_history` | — (bridge local) | `{ chatId, limit? }` | `{ messages }` |
-| `op.list_tasks` | `get_tasks` | — | `{ tasks }` |
+| `op.list_tasks` | `get_tasks` | `{ taskId? \| batchId?, waitMs?, resultOffset? }` | `{ tasks, batchIds?, partial?, note? }` |
 | `op.list_helpers` | `list_helpers` | — | `{ helpers }` |
 | `op.list_schedules` | `list_schedules` | — | `{ schedules }` |
 | `op.get_usage` | — (bridge ledger) | `{ days? }` | `{ buckets, byBot, totals }` |
+
+The team's task tool answers for one batch or one task at a time — there is no "list
+everything" call. A client that names one gets that one; a client that names neither
+gets every batch the bridge has dispatched, and the answer carries `partial: true`
+with a `note` that says so.
 
 ### Acting
 
@@ -77,12 +82,12 @@ the bridge always agree on which tool backs which operation.
 |---|---|---|
 | `op.send_message` | *agent-backed* | `{ chatId, text, mentions?, attachments? }` |
 | `op.abort_turn` | *agent-backed* | `{ turnId }` |
-| `op.dispatch` | `dispatch_tasks` | `{ botIds, prompt, title? }` |
-| `op.cancel_task` | `cancel_tasks` | `{ taskId }` |
+| `op.dispatch` | `dispatch_tasks` | `{ botIds, prompt, title?, requestId? }` |
+| `op.cancel_task` | `cancel_tasks` | `{ taskId \| batchId }` |
 | `op.start_helper` | `start_helper` | `{ title?, task, targetBotId? }` |
 | `op.stop_helper` | `stop_helper` | `{ helperId }` |
 | `op.recall` | `recall` | `{ botId, query, limit? }` |
-| `op.remember` | `remember` | `{ botId, text }` |
+| `op.remember` | `remember` | `{ botId, text, key?, replaceId? }` |
 | `op.forget` | `forget` | `{ botId, id }` |
 | `op.create_bot` | `create_bot` | `{ name, role?, instructions?, skin?, color?, model?, main? }` |
 | `op.update_bot` | `update_bot` | `{ botId, … }` |

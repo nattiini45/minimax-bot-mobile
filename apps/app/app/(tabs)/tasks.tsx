@@ -10,10 +10,16 @@ import { useAppStore } from '../../src/state/store';
 const STATE_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = {
   queued: 'neutral',
   running: 'warning',
+  waiting_for_tasks: 'warning',
+  waiting_for_user: 'warning',
+  paused: 'neutral',
+  unknown: 'danger',
   done: 'success',
   failed: 'danger',
   cancelled: 'neutral',
   stopped: 'neutral',
+  interrupted: 'neutral',
+  blocked: 'warning',
   error: 'danger',
 };
 
@@ -21,12 +27,16 @@ const STATE_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> =
 export default function TasksScreen() {
   const theme = useTheme();
   const tasks = useAppStore((state) => state.tasks);
+  const tasksNote = useAppStore((state) => state.tasksNote);
   const helpers = useAppStore((state) => state.helpers);
   const request = useAppStore((state) => state.request);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <SectionHeader title={`Tasks (${tasks.length})`} />
+      {tasksNote ? (
+        <Text style={[styles.note, { color: theme.colors.muted }]}>{tasksNote}</Text>
+      ) : null}
       {tasks.length === 0 ? (
         <Card>
           <EmptyState title="No tasks yet" body="Dispatch work to your team from any chat." />
@@ -127,6 +137,11 @@ const styles = StyleSheet.create({
   itemMeta: {
     fontSize: 13,
     marginTop: 4,
+  },
+  note: {
+    fontSize: 12,
+    marginBottom: 8,
+    lineHeight: 17,
   },
   actions: {
     flexDirection: 'row',

@@ -18,7 +18,6 @@ export default function BotScreen() {
 
   const bots = useAppStore((state) => state.bots);
   const bot = bots.find((entry) => entry.botId === botId);
-  const request = useAppStore((state) => state.request);
   const requestAsync = useAppStore((state) => state.requestAsync);
 
   const [memory, setMemory] = useState<{ id: string; text: string; createdAt: number }[]>([]);
@@ -28,7 +27,8 @@ export default function BotScreen() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      const result = (await requestAsync('op.recall', { botId, query: '', limit: 50 })) as {
+      // The team's memory tool reads at most twenty entries per page.
+      const result = (await requestAsync('op.recall', { botId, query: '', limit: 20 })) as {
         entries?: { id: string; text: string; createdAt: number }[];
       } | null;
       setMemory(result?.entries ?? []);
@@ -92,8 +92,15 @@ export default function BotScreen() {
                 size="sm"
                 onPress={() => {
                   tapMedium();
-                  request('op.forget', { botId, id: entry.id });
-                  void load();
+                  // As with remembering, the list is read back once the entry is gone.
+                  void (async () => {
+                    try {
+                      await requestAsync('op.forget', { botId, id: entry.id });
+                    } catch {
+                      // The store already carries the failure.
+                    }
+                    await load();
+                  })();
                 }}
               />
             </View>
@@ -125,9 +132,19 @@ export default function BotScreen() {
             disabled={!note.trim()}
             onPress={() => {
               tapMedium();
-              request('op.remember', { botId, text: note.trim() });
+              const text = note.trim();
+              if (!text) return;
               setNote('');
-              setTimeout(() => void load(), 400);
+              // The list is read back only once the note has actually been written:
+              // reloading on a timer would race the write and show an empty list.
+              void (async () => {
+                try {
+                  await requestAsync('op.remember', { botId, text });
+                } catch {
+                  // The store already carries the failure.
+                }
+                await load();
+              })();
             }}
           />
         </View>

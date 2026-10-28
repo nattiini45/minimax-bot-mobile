@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "export:web": "expo export -p web",
+    "build:android": "npm run build -w @minimax-bot/protocol && cd android && ./gradlew assembleRelease",
     "typecheck": "tsc --noEmit",
     "test": "jest"
   },

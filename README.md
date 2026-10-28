@@ -123,6 +123,35 @@ MiniMax Code plugin and open its surface at `/bridge`. It shows the relay
 configuration, requests pairing codes and lists paired phones. See
 [docs/PAIRING.md](docs/PAIRING.md).
 
+The bridge needs a **bridge token** to claim an account on the relay. Mint one
+against the relay's secret:
+
+```bash
+npm run mint:token -- --secret <RELAY_SECRET> --bridge-id bridge_1 --bridge-name MyDesktop --days 30
+```
+
+It prints the token, its expiry and the configuration block to paste into the
+bridge's surface.
+
+### Build the Android app
+
+The Android release build **runs on Linux**. React Native's native build uses
+`ninja`, which does not honour the long-path prefix that Windows' `LongPathsEnabled`
+sets, so the generated object paths run past the 260-character limit no matter where
+the repository lives — and RN 0.88 no longer accepts `newArchEnabled=false` as a way
+out. A WSL2 distribution, a container or a CI runner all work.
+
+```bash
+# On Linux, with JDK 17 and the Android SDK on the path:
+scripts/build-android.sh
+
+# The whole workspace is copied, not just `apps/app`: the client bundles
+# `@minimax-bot/protocol`, so a change in a workspace package that never reaches the
+# build host produces an APK built against a contract it was not built with.
+```
+
+The output is `apps/app/android/app/build/outputs/apk/release/app-release.apk`.
+
 ## Scripts
 
 | Command | What it does |
@@ -135,6 +164,8 @@ configuration, requests pairing codes and lists paired phones. See
 | `npm run typecheck` | Every workspace |
 | `npm run export:web` | Bundles the client for the PWA target |
 | `npm run app` | Starts the Expo dev server |
+| `npm run mint:token` | Mints a bridge token for the relay |
+| `npm run build:android` | Builds the Android release APK (on Linux) |
 
 Two runner notes, both verified on Node 24:
 
@@ -148,10 +179,10 @@ Two runner notes, both verified on Node 24:
 
 | Suite | Count | Runner |
 |---|---|---|
-| `packages/protocol` | 24 | vitest |
+| `packages/protocol` | 29 | vitest |
 | `packages/relay` | 32 | vitest |
-| `packages/bridge` | 37 | node:test |
-| `apps/app` | 10 | jest + jest-expo |
+| `packages/bridge` | 72 | node:test |
+| `apps/app` | 25 | jest + jest-expo |
 
 ## What the phone can do
 
@@ -166,15 +197,19 @@ Two runner notes, both verified on Node 24:
   questionnaire from the phone.
 - **Usage** — turns, characters, tool calls and errors, per bucket and per Bot.
 
-## Known limitation
+## Two limits worth knowing
 
-The live handshake between the bridge and a running `@minimax-bot` runtime cannot
-be exercised from a workstation: the Mini App loopback credential is issued per
-WebContents by the Electron Host and injected only for the registered tab, so the
-live tool schemas are not introspectable externally. The schema-driven argument
-mapping exists precisely because of this, and the first end-to-end run needs a
-human in front of the desktop. Details in
-[docs/PAIRING.md](docs/PAIRING.md#the-one-thing-that-cannot-be-tested-from-a-workstation).
+**The relay keeps its state in memory.** The device registry, the bridge token and
+the replay ring all live inside the Durable Object, so a restart empties them and
+every paired phone has to pair again. That is a deliberate trade — the hibernation
+API would let the Durable Object be evicted mid-session and silently drop every
+frame — and the client is built for it: the relay accepts the WebSocket and closes
+it with a code that says *why*, so the phone asks for a new pairing code instead of
+retrying a credential that can never work.
+
+**The team's task tool answers for one batch at a time.** There is no "list every
+task" call, so the phone rebuilds the list from the batches the bridge has
+dispatched and says that the list is partial rather than pretending it is complete.
 
 ## Attribution
 
