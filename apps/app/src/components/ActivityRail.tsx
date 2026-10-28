@@ -112,9 +112,12 @@ export function ActivityRail({
 /** Formats a duration the way the desktop skin does: seconds under a minute. */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  return `${minutes}m ${Math.round((ms % 60_000) / 1000)}s`;
+  const seconds = ms / 1000;
+  const rounded = Math.round(seconds);
+  // Rounding first means 59.999s is a minute, not "60s".
+  if (rounded < 60) return seconds < 10 ? `${seconds.toFixed(1)}s` : `${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  return `${minutes}m ${rounded % 60}s`;
 }
 
 const styles = StyleSheet.create({

@@ -502,7 +502,7 @@ export class Bridge {
         await this.runner.answer(payload.requestId, payload.answers ?? []);
         return { requestId: payload.requestId };
       case 'op.list_history':
-        return { messages: this.history.get(payload.chatId) ?? [] };
+        return { messages: this.history.get(payload.chatId) ?? [], reactions: this.reactionsFor(payload.chatId) };
       case 'op.get_usage':
         return this.ledger.report({ days: payload.days ?? 7 });
       case 'op.react':
@@ -749,6 +749,25 @@ export class Bridge {
     return { reaction };
   }
 
+  /**
+   * The reactions of a chat, as a flat list.
+   *
+   * The counts live on the desktop, so a phone that opens a chat later reads them from
+   * here instead of showing an empty thread with chips missing.
+   */
+  reactionsFor(chatId) {
+    const messages = this.history.get(chatId) ?? [];
+    const out = [];
+    for (const message of messages) {
+      const bucket = this.reactions.get(message.messageId);
+      if (!bucket) continue;
+      for (const [emoji, count] of bucket) {
+        out.push({ messageId: message.messageId, emoji, count });
+      }
+    }
+    return out;
+  }
+
   pushHistory(chatId, message) {
     const list = this.history.get(chatId) ?? [];
     // A turn can commit more than once: the team narrates while it works. The newest
@@ -759,6 +778,10 @@ export class Bridge {
     } else {
       list.push(message);
     }
+    // A message that replaced an earlier one carries a newer `ts`, so the list is put
+    // back in order: the phone sorts by `ts` when it renders, and a thread that reads
+    // differently after a reload is a thread that reads wrong.
+    list.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
     if (list.length > HISTORY_LIMIT) list.splice(0, list.length - HISTORY_LIMIT);
     this.history.set(chatId, list);
   }

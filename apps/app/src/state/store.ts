@@ -49,7 +49,7 @@ export interface AppState {
   /** The turn each chat is currently running. */
   activeTurn: Record<string, string>;
   /** Reactions per message id. */
-  reactions: Record<string, { messageId: string; emoji: string; count: number }[]>;
+  reactions: Record<string, AppReaction[]>;
   tasks: AppTask[];
   /**
    * Why the task list may be incomplete.
@@ -221,14 +221,38 @@ export interface AppActivity {
   startedAt: number;
   durationMs?: number;
   error?: string;
-  toolInput?: string;
 }
 
 /** How many tool calls are kept per chat. */
 const ACTIVITY_LIMIT = 40;
 
+/**
+ * Keeps the activity list within its limit.
+ *
+ * Only finished calls are dropped. A running call is still the truth about what the
+ * team is doing, and evicting it would lose the call that a later finish belongs to.
+ */
+function trimActivity(list: AppActivity[]): AppActivity[] {
+  if (list.length <= ACTIVITY_LIMIT) return list;
+  let excess = list.length - ACTIVITY_LIMIT;
+  return list.filter((entry) => {
+    if (excess > 0 && entry.status !== 'running') {
+      excess -= 1;
+      return false;
+    }
+    return true;
+  });
+}
+
 /** How many reactions are kept per message. */
 const REACTION_LIMIT = 12;
+
+/** One reaction on one message. */
+export interface AppReaction {
+  messageId: string;
+  emoji: string;
+  count: number;
+}
 
 const SESSION_KEY = 'minimax-bot.session';
 const OUTBOX_KEY = 'minimax-bot.outbox';
@@ -281,8 +305,19 @@ function applyOperationResult(
     case 'op.list_history': {
       const chatId = (payload as { chatId?: string } | undefined)?.chatId;
       if (!chatId || !Array.isArray(data.messages)) return;
+      // The desktop owns the reaction counts, so they arrive with the thread. Without
+      // them the chips would vanish on a restart while the desktop kept counting.
+      const reactions = Array.isArray(data.reactions) ? (data.reactions as AppReaction[]) : [];
+      const byMessage: Record<string, AppReaction[]> = {};
+      for (const reaction of reactions) {
+        if (!reaction?.messageId || !reaction?.emoji) continue;
+        const list = byMessage[reaction.messageId] ?? [];
+        list.push(reaction);
+        byMessage[reaction.messageId] = list;
+      }
       useAppStore.setState({
         messages: { ...state.messages, [chatId]: data.messages },
+        reactions: { ...state.reactions, ...byMessage },
       });
       return;
     }
@@ -566,8 +601,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ bridgeOnline: p.bridgeOnline === true });
       if (p.truncated === true) {
         // The relay could not replay everything this phone missed, so its view has a
-        // hole. The projection is dropped and rebuilt from a fresh read.
-        set({ messages: {}, tasks: [], helpers: [], schedules: [], bots: [], groups: [] });
+        // hole. The projection is dropped and rebuilt from a fresh read — including
+        // the live trace, which would otherwise keep claiming that the team is working.
+        set({
+          messages: {},
+          tasks: [],
+          helpers: [],
+          schedules: [],
+          bots: [],
+          groups: [],
+          activity: {},
+          activeTurn: {},
+          reactions: {},
+        });
       }
       get().refreshTeam();
       return;
@@ -650,46 +696,49 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case 'evt.tool_started': {
-        const { chatId, turnId, toolName, toolInput } = p as {
+        const { chatId, turnId, toolName, callId } = p as {
           chatId?: string;
           turnId?: string;
           toolName?: string;
-          toolInput?: string;
+          callId?: string;
         };
         if (!chatId || !turnId || !toolName) break;
         const list = state.activity[chatId] ?? [];
         const entry: AppActivity = {
-          id: `${turnId}:${toolName}:${list.length}`,
+          // The bridge names every call, so two calls of the same tool never collide.
+          id: callId ?? `${turnId}:${toolName}:${list.length}:${Date.now()}`,
           chatId,
           turnId,
           toolName,
           status: 'running',
           startedAt: Date.now(),
-          ...(toolInput ? { toolInput } : {}),
         };
-        set({ activity: { ...state.activity, [chatId]: [...list, entry].slice(-ACTIVITY_LIMIT) } });
+        set({ activity: { ...state.activity, [chatId]: trimActivity([...list, entry]) } });
         break;
       }
 
       case 'evt.tool_finished': {
-        const { chatId, turnId, toolName, ok, usage, error } = p as {
+        const { chatId, turnId, toolName, callId, ok, usage, error } = p as {
           chatId?: string;
           turnId?: string;
           toolName?: string;
+          callId?: string;
           ok?: boolean;
           usage?: { durationMs?: number };
           error?: string;
         };
         if (!chatId || !turnId || !toolName) break;
         const list = state.activity[chatId] ?? [];
-        // The same tool can run twice in one turn, so the newest unfinished call with
-        // this name is the one that reported back.
-        let index = -1;
-        for (let i = list.length - 1; i >= 0; i -= 1) {
-          const entry = list[i]!;
-          if (entry.turnId === turnId && entry.toolName === toolName && entry.status === 'running') {
-            index = i;
-            break;
+        // The call id names the exact call, so a finish never lands on the wrong one.
+        // Without one, the oldest unfinished call of that name is the one that ran.
+        let index = list.findIndex((entry) => callId !== undefined && entry.id === callId);
+        if (index < 0) {
+          for (let i = 0; i < list.length; i += 1) {
+            const entry = list[i]!;
+            if (entry.turnId === turnId && entry.toolName === toolName && entry.status === 'running') {
+              index = i;
+              break;
+            }
           }
         }
         if (index < 0) break;
@@ -701,19 +750,36 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...(durationMs === undefined ? {} : { durationMs }),
           ...(error ? { error } : {}),
         };
-        set({ activity: { ...state.activity, [chatId]: next } });
+        set({ activity: { ...state.activity, [chatId]: trimActivity(next) } });
         break;
       }
 
       case 'evt.turn_finished': {
-        const { chatId } = p as { chatId?: string };
+        const { chatId, turnId } = p as { chatId?: string; turnId?: string };
         if (!chatId) break;
         const list = (state.messages[chatId] ?? []).map((message) =>
           message.pending ? { ...message, pending: false } : message,
         );
         const activeTurn = { ...state.activeTurn };
-        delete activeTurn[chatId];
-        set({ messages: { ...state.messages, [chatId]: list }, activeTurn });
+        // A turn that finished is not necessarily the turn that is running: the desktop
+        // can start the next one before the previous one reports. A stale finish must
+        // not clear the new turn, or the rail stops showing the work in progress.
+        if (turnId === undefined || activeTurn[chatId] === turnId) {
+          delete activeTurn[chatId];
+        }
+        // A tool that never reported back — an aborted turn, a cut budget — would keep
+        // its entry running for ever, and the rail would claim the team is working.
+        const activity = state.activity[chatId] ?? [];
+        const closed = activity.map((entry) =>
+          entry.status === 'running' && (turnId === undefined || entry.turnId === turnId)
+            ? { ...entry, status: 'failed' as const, error: entry.error ?? 'The turn ended before this tool reported back.' }
+            : entry,
+        );
+        set({
+          messages: { ...state.messages, [chatId]: list },
+          activeTurn,
+          activity: { ...state.activity, [chatId]: closed },
+        });
         break;
       }
 
