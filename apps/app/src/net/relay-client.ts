@@ -2,14 +2,21 @@
  * Relay client.
  *
  * Holds the WebSocket to the relay, reconnects with an escalating backoff and resumes
- * from the last sequence number it saw. Frames sent while offline are queued so a
- * message composed on the train reaches the team when the signal comes back.
+ * from the last sequence number it saw. Frames sent while offline are handed back to the
+ * caller, which keeps them in its outbox — this client does not keep a second queue of
+ * its own, because a frame queued in two places is a frame sent twice.
  */
 
 import { createFrame, type Frame } from '@minimax-bot/protocol';
 
+import { relayWsUrl } from './relay-url';
+
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
-const MAX_QUEUE = 100;
+
+/** Close codes the relay uses for a socket it will never serve again. */
+export const CLOSE_UNAUTHORIZED = 4001;
+export const CLOSE_DEVICE_REVOKED = 4003;
+export const CLOSE_REPLACED = 4000;
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -21,6 +28,8 @@ export interface RelayClientOptions {
   clientVersion: string;
   onFrame?: (frame: Frame) => void;
   onStatus?: (status: ConnectionStatus, detail?: string) => void;
+  /** Called when the relay closed the socket for good; the app must stop retrying. */
+  onFatal?: (code: number) => void;
 }
 
 export class RelayClient {
@@ -29,7 +38,6 @@ export class RelayClient {
   private attempt = 0;
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private queue: string[] = [];
   private lastSeq = 0;
   private options: RelayClientOptions;
 
@@ -46,7 +54,7 @@ export class RelayClient {
   }
 
   endpoint(): string {
-    const base = this.options.url.replace(/\/+$/, '');
+    const base = relayWsUrl(this.options.url);
     const params = new URLSearchParams({
       role: 'device',
       subject: this.options.deviceId,
@@ -65,9 +73,9 @@ export class RelayClient {
     this.socket = socket;
 
     socket.onopen = () => {
-      this.attempt = 0;
+      // The backoff is only reset once the handshake completes. A relay that accepts the
+      // socket and then drops it would otherwise be retried every second, forever.
       this.setStatus('online');
-      this.flush();
     };
 
     socket.onmessage = (event) => {
@@ -78,16 +86,34 @@ export class RelayClient {
       } catch {
         return;
       }
-      if (typeof frame.seq === 'number' && frame.seq > this.lastSeq) {
+      if (frame.type === 'hello.ok') {
+        this.attempt = 0;
+      }
+      // A frame the relay has already sequenced is one the app has already applied.
+      if (typeof frame.seq === 'number') {
+        if (frame.seq <= this.lastSeq) return;
         this.lastSeq = frame.seq;
       }
       this.options.onFrame?.(frame);
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       this.socket = null;
       this.setStatus('offline');
-      if (!this.closed) this.scheduleReconnect();
+      if (this.closed) return;
+      // A revoked or replaced device must stop trying: reconnecting forever with a
+      // credential the relay has already rejected is a loop the user cannot see.
+      if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_DEVICE_REVOKED) {
+        this.closed = true;
+        this.options.onFatal?.(event.code);
+        return;
+      }
+      if (event.code === CLOSE_REPLACED) {
+        this.closed = true;
+        this.options.onFatal?.(event.code);
+        return;
+      }
+      this.scheduleReconnect();
     };
 
     socket.onerror = () => {
@@ -106,17 +132,18 @@ export class RelayClient {
     this.setStatus('idle');
   }
 
-  /** Sends a frame. Frames sent while offline are queued and flushed on reconnect. */
+  /**
+   * Sends a frame.
+   *
+   * Returns false when the socket is not open: the caller keeps the frame in its outbox
+   * and sends it again once the connection is back. The same `opId` is reused, so the
+   * bridge's deduplication turns a retry into a no-op rather than a second message.
+   */
   send(frame: Frame): boolean {
-    const raw = JSON.stringify(frame);
     if (this.socket && this.socket.readyState === 1) {
-      this.socket.send(raw);
+      this.socket.send(JSON.stringify(frame));
       return true;
     }
-    if (this.queue.length >= MAX_QUEUE) {
-      this.queue.shift();
-    }
-    this.queue.push(raw);
     return false;
   }
 
@@ -141,18 +168,6 @@ export class RelayClient {
       this.timer = null;
       this.connect();
     }, delay);
-  }
-
-  private flush(): void {
-    const pending = this.queue;
-    this.queue = [];
-    for (const raw of pending) {
-      try {
-        this.socket?.send(raw);
-      } catch {
-        this.queue.push(raw);
-      }
-    }
   }
 
   private setStatus(status: ConnectionStatus): void {

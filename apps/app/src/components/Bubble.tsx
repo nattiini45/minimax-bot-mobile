@@ -55,7 +55,7 @@ export function Bubble({
         <Text style={[styles.text, { color: foreground }]}>{text}</Text>
         {pending ? (
           <Text style={[styles.pending, { color: isUser ? theme.colors.userInk : theme.colors.subtle }]}>
-            streaming…
+            {isUser ? 'sending…' : 'streaming…'}
           </Text>
         ) : null}
       </View>

@@ -7,6 +7,8 @@
 
 import { isValidPairingCode, type PairingResponse } from '@minimax-bot/protocol';
 
+import { relayHttpUrl } from './relay-url';
+
 export interface PairingResult {
   ok: boolean;
   deviceToken?: string;
@@ -28,7 +30,7 @@ export async function pairWithCode(params: {
     return { ok: false, message: 'Enter the six digit code shown on your desktop.' };
   }
 
-  const base = params.url.replace(/\/+$/, '');
+  const base = relayHttpUrl(params.url);
   try {
     const response = await fetch(`${base}/r/${encodeURIComponent(params.accountId)}/pair`, {
       method: 'POST',
@@ -60,7 +62,7 @@ export async function relayStatus(url: string, accountId: string): Promise<{
   bridgeOnline: boolean;
   deviceCount: number;
 } | null> {
-  const base = url.replace(/\/+$/, '');
+  const base = relayHttpUrl(url);
   try {
     const response = await fetch(`${base}/r/${encodeURIComponent(accountId)}/status`);
     if (!response.ok) return null;

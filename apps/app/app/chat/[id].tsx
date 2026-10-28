@@ -4,6 +4,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -37,8 +38,8 @@ export default function ChatScreen() {
   const bots = useAppStore((state) => state.bots);
   const groups = useAppStore((state) => state.groups);
   const messages = useAppStore((state) => state.messages[chatId]);
-  const request = useAppStore((state) => state.request);
   const requestAsync = useAppStore((state) => state.requestAsync);
+  const sendChatMessage = useAppStore((state) => state.sendChatMessage);
 
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<AppMessage>>(null);
@@ -73,7 +74,7 @@ export default function ChatScreen() {
     if (!text) return;
     tapMedium();
     setDraft('');
-    request('op.send_message', { chatId, text });
+    sendChatMessage(chatId, text);
   };
 
   const title = bot?.name ?? group?.name ?? 'Chat';
@@ -160,17 +161,18 @@ export default function ChatScreen() {
           onSubmitEditing={send}
           accessibilityLabel="Message"
         />
-        <View
+        <Pressable
           style={[styles.send, { backgroundColor: draft.trim() ? theme.colors.user : theme.colors.tag }]}
-          accessible
           accessibilityRole="button"
           accessibilityLabel="Send"
-          onTouchEnd={send}
+          accessibilityState={{ disabled: !draft.trim() }}
+          disabled={!draft.trim()}
+          onPress={send}
         >
           <Text style={[styles.sendLabel, { color: draft.trim() ? theme.colors.userInk : theme.colors.subtle }]}>
             ↑
           </Text>
-        </View>
+        </Pressable>
       </View>
 
       {bot ? null : null}

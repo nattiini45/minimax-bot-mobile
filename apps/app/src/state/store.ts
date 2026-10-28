@@ -47,15 +47,41 @@ export interface AppState {
   usage: AppUsage | null;
 
   outbox: OutboxItem[];
-  pendingOp: Record<string, { type: string; resolve: (value: unknown) => void; reject: (error: Error) => void }>;
+  /**
+   * The pending bubble behind each `opId`.
+   *
+   * A send that the desktop refuses must not leave a message the desktop never
+   * accepted, so the bubble is taken back out when its operation fails.
+   */
+  optimisticByOp: Record<string, { messageId: string; chatId: string }>;
+  pendingOp: Record<
+    string,
+    {
+      type: string;
+      payload: unknown;
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >;
 
   setSession: (session: Session | null) => void;
   setStatus: (status: ConnectionStatus) => void;
   setError: (message: string | null) => void;
   applyFrame: (frame: Frame) => void;
-  request: (type: string, payload: unknown) => void;
+  request: (type: string, payload: unknown) => string;
   requestAsync: (type: string, payload: unknown) => Promise<unknown>;
+  /**
+   * Sends a chat message and shows it immediately.
+   *
+   * The desktop owns the thread, so the message is shown as a pending bubble and
+   * reconciled when the desktop commits it. The client chooses the message id and the
+   * bridge echoes it back, so the committed message replaces the bubble in place.
+   */
+  sendChatMessage: (chatId: string, text: string) => void;
   flushOutbox: () => void;
+  /** Re-reads everything the phone can show: the roster, tasks, helpers and schedules. */
+  refreshTeam: () => void;
 }
 
 export interface AppBot {
@@ -159,8 +185,65 @@ export interface AppUsage {
 }
 
 const SESSION_KEY = 'minimax-bot.session';
+const OUTBOX_KEY = 'minimax-bot.outbox';
+/** How long an operation may wait for its answer before the caller is told it timed out. */
+const OP_TIMEOUT_MS = 20_000;
 
 let client: RelayClient | null = null;
+
+/** The operation type behind each `opId`, so an answer can be applied to the right list. */
+const opTypes = new Map<string, string>();
+
+/**
+ * Applies the answer to a read operation to the store.
+ *
+ * The bridge answers a read with the data; the phone is a projection of that data, so
+ * the answer is what the screen renders.
+ */
+function applyOperationResult(
+  result: unknown,
+  type: string | undefined,
+  payload: unknown,
+): void {
+  if (!result || typeof result !== 'object') return;
+  const data = result as Record<string, any>;
+  const state = useAppStore.getState();
+
+  switch (type) {
+    case 'op.list_team':
+      useAppStore.setState({
+        bots: Array.isArray(data.bots) ? data.bots : state.bots,
+        groups: Array.isArray(data.groups) ? data.groups : state.groups,
+        tools: Array.isArray(data.tools) ? data.tools : state.tools,
+        diagnostics: data.diagnostics ? { ...state.diagnostics, ...data.diagnostics } : state.diagnostics,
+      });
+      return;
+    case 'op.list_tasks':
+      useAppStore.setState({ tasks: Array.isArray(data.tasks) ? data.tasks : state.tasks });
+      return;
+    case 'op.list_helpers':
+      useAppStore.setState({ helpers: Array.isArray(data.helpers) ? data.helpers : state.helpers });
+      return;
+    case 'op.list_schedules':
+      useAppStore.setState({
+        schedules: Array.isArray(data.schedules) ? data.schedules : state.schedules,
+      });
+      return;
+    case 'op.list_history': {
+      const chatId = (payload as { chatId?: string } | undefined)?.chatId;
+      if (!chatId || !Array.isArray(data.messages)) return;
+      useAppStore.setState({
+        messages: { ...state.messages, [chatId]: data.messages },
+      });
+      return;
+    }
+    case 'op.get_usage':
+      if (data.totals) useAppStore.setState({ usage: data as AppUsage });
+      return;
+    default:
+      return;
+  }
+}
 
 async function persistSession(session: Session | null) {
   if (!session) {
@@ -177,6 +260,31 @@ export async function loadSession(): Promise<Session | null> {
     return JSON.parse(raw) as Session;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Loads the outbox left over from a previous run.
+ *
+ * A message composed while the desktop was unreachable is in here. Without this it
+ * would be lost the moment the app was closed.
+ */
+export async function loadOutbox(): Promise<OutboxItem[]> {
+  try {
+    const raw = await AsyncStorage.getItem(OUTBOX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as OutboxItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistOutbox(outbox: OutboxItem[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox));
+  } catch {
+    /* storage is full or unavailable; the in-memory outbox still works */
   }
 }
 
@@ -205,6 +313,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   usage: null,
 
   outbox: [],
+  optimisticByOp: {},
   pendingOp: {},
 
   setSession: (session) => {
@@ -217,6 +326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   request: (type, payload) => {
     const opId = `op_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    opTypes.set(opId, type);
     const frame = {
       v: 1 as const,
       id: `f_${opId}`,
@@ -227,18 +337,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       opId,
     };
 
-    const current = get();
     const sent = client?.send(frame) ?? false;
     if (!sent) {
-      set({ outbox: [...current.outbox, { opId, type, payload, queuedAt: Date.now() }] });
+      const outbox = [...get().outbox, { opId, type, payload, queuedAt: Date.now() }];
+      set({ outbox });
+      void persistOutbox(outbox);
     }
+    return opId;
   },
 
   requestAsync: (type, payload) => {
     const opId = `op_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    opTypes.set(opId, type);
     return new Promise((resolve, reject) => {
+      // An operation that is never answered must not leave the caller waiting for
+      // ever: a screen that awaits this would spin until the app is closed.
+      const timer = setTimeout(() => {
+        set((state) => {
+          const next = { ...state.pendingOp };
+          delete next[opId];
+          return { pendingOp: next };
+        });
+        reject(new Error('The desktop did not answer in time.'));
+      }, OP_TIMEOUT_MS);
+
       set((state) => ({
-        pendingOp: { ...state.pendingOp, [opId]: { type, resolve, reject } },
+        pendingOp: { ...state.pendingOp, [opId]: { type, payload, resolve, reject, timer } },
       }));
 
       const frame = {
@@ -253,9 +377,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const sent = client?.send(frame) ?? false;
       if (!sent) {
-        set((state) => ({
-          outbox: [...state.outbox, { opId, type, payload, queuedAt: Date.now() }],
-        }));
+        const outbox = [...get().outbox, { opId, type, payload, queuedAt: Date.now() }];
+        set({ outbox });
+        void persistOutbox(outbox);
       }
     });
   },
@@ -263,6 +387,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   flushOutbox: () => {
     const { outbox } = get();
     if (!outbox.length || !client) return;
+    const remaining: OutboxItem[] = [];
     for (const item of outbox) {
       const frame = {
         v: 1 as const,
@@ -273,9 +398,51 @@ export const useAppStore = create<AppState>((set, get) => ({
         payload: item.payload,
         opId: item.opId,
       };
-      if (!client.send(frame)) return;
+      if (!client.send(frame)) {
+        // The socket went away mid-flush. Everything from here on stays queued; the
+        // frames already sent keep their opId, so the bridge's dedupe makes a later
+        // retry harmless.
+        remaining.push(...outbox.slice(outbox.indexOf(item)));
+        break;
+      }
     }
-    set({ outbox: [] });
+    set({ outbox: remaining });
+    void persistOutbox(remaining);
+  },
+
+  refreshTeam: () => {
+    const state = get();
+    if (!state.session) return;
+    state.request('op.list_team', {});
+    state.request('op.list_tasks', {});
+    state.request('op.list_helpers', {});
+    state.request('op.list_schedules', {});
+  },
+
+  sendChatMessage: (chatId, text) => {
+    const body = text.trim();
+    if (!body) return;
+
+    // The client picks the message id, so the bubble it shows now is the very message
+    // the desktop commits later: the committed message replaces it in place, and a
+    // send that fails can take its own bubble back out.
+    const messageId = `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const message: AppMessage = {
+      messageId,
+      chatId,
+      role: 'user',
+      text: body,
+      ts: Date.now(),
+      pending: true,
+    };
+    set((state) => ({
+      messages: { ...state.messages, [chatId]: [...(state.messages[chatId] ?? []), message] },
+    }));
+
+    const opId = get().request('op.send_message', { chatId, text: body, clientMessageId: messageId });
+    set((state) => ({
+      optimisticByOp: { ...state.optimisticByOp, [opId]: { messageId, chatId } },
+    }));
   },
 
   applyFrame: (frame) => {
@@ -287,6 +454,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const opId = p.opId;
       const pending = opId ? state.pendingOp[opId] : undefined;
       if (pending && opId) {
+        clearTimeout(pending.timer);
         set((current) => {
           const next = { ...current.pendingOp };
           delete next[opId];
@@ -294,13 +462,35 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
         pending.resolve(p.result);
       }
+      // The answer to a read is the only place the data ever arrives, so it is applied
+      // to the store here. A screen that only awaits the promise would otherwise show
+      // an empty list forever.
+      applyOperationResult(p.result, opId ? opTypes.get(opId) : undefined, pending?.payload);
       return;
     }
 
     if (frame.type === 'err') {
       const opId = p.opId;
+      // A send the desktop refused must not leave a bubble it never accepted.
+      if (opId) {
+        const optimistic = state.optimisticByOp[opId];
+        if (optimistic) {
+          set((current) => {
+            const list = (current.messages[optimistic.chatId] ?? []).filter(
+              (message) => message.messageId !== optimistic.messageId,
+            );
+            const next = { ...current.optimisticByOp };
+            delete next[opId];
+            return {
+              messages: { ...current.messages, [optimistic.chatId]: list },
+              optimisticByOp: next,
+            };
+          });
+        }
+      }
       const pending = opId ? state.pendingOp[opId] : undefined;
       if (pending && opId) {
+        clearTimeout(pending.timer);
         set((current) => {
           const next = { ...current.pendingOp };
           delete next[opId];
@@ -314,6 +504,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (frame.type === 'hello.ok') {
       set({ bridgeOnline: p.bridgeOnline === true });
+      if (p.truncated === true) {
+        // The relay could not replay everything this phone missed, so its view has a
+        // hole. The projection is dropped and rebuilt from a fresh read.
+        set({ messages: {}, tasks: [], helpers: [], schedules: [], bots: [], groups: [] });
+      }
+      get().refreshTeam();
       return;
     }
 
@@ -356,6 +552,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'evt.message_committed': {
         const message = p.message as AppMessage | undefined;
         if (!message) break;
+        // The committed message replaces the pending bubble that carried the same id.
+        if (message.role === 'user') {
+          const next = { ...state.optimisticByOp };
+          let changed = false;
+          for (const [opId, entry] of Object.entries(next)) {
+            if (entry.messageId === message.messageId) {
+              delete next[opId];
+              changed = true;
+            }
+          }
+          if (changed) set({ optimisticByOp: next });
+        }
         const list = [...(state.messages[message.chatId] ?? [])].filter(
           (existing) => existing.messageId !== message.messageId,
         );
@@ -467,6 +675,20 @@ export function connectRelay(session: Session): RelayClient {
       if (status === 'online') {
         useAppStore.getState().flushOutbox();
       }
+    },
+    onFatal: (code) => {
+      // The relay will not serve this device again: it was revoked, or another phone
+      // took its place. The session is dropped so the app asks for a new pairing code
+      // instead of retrying forever with a credential that cannot work.
+      useAppStore.getState().setError(
+        code === 4003
+          ? 'This phone was unpaired on the desktop. Pair it again there.'
+          : 'The relay refused this phone. Pair it again.',
+      );
+      useAppStore.getState().setSession(null);
+      void persistSession(null);
+      void persistOutbox([]);
+      useAppStore.setState({ outbox: [] });
     },
   });
   client = instance;

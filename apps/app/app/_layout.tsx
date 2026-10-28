@@ -6,7 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { configureNotifications, requestNotificationPermission } from '../src/native/notifications';
 import { ThemeProvider, useTheme } from '../src/theme';
-import { connectRelay, loadSession, useAppStore } from '../src/state/store';
+import { connectRelay, loadOutbox, loadSession, useAppStore } from '../src/state/store';
 
 export default function RootLayout() {
   return (
@@ -26,7 +26,10 @@ function Shell() {
   useEffect(() => {
     configureNotifications();
     void requestNotificationPermission();
-    void loadSession().then((session) => {
+    // The outbox is restored before the connection opens, so a message composed while
+    // the desktop was unreachable is sent as soon as the relay is reachable again.
+    void Promise.all([loadSession(), loadOutbox()]).then(([session, outbox]) => {
+      useAppStore.setState({ outbox });
       if (!session) return;
       useAppStore.getState().setSession(session);
       connectRelay(session);
@@ -43,6 +46,9 @@ function Shell() {
           headerTitleStyle: { fontSize: 17, fontWeight: '600' },
           contentStyle: { backgroundColor: theme.colors.bg },
           headerShadowVisible: false,
+          // Without this the web back button is announced as "(tabs), back": the route
+          // group's name leaks into the accessible name of the control.
+          headerBackTitle: 'Back',
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

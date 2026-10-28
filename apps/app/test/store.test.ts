@@ -25,6 +25,7 @@ function reset() {
     questions: [],
     usage: null,
     outbox: [],
+    optimisticByOp: {},
     pendingOp: {},
   });
 }
@@ -120,6 +121,69 @@ describe('streaming a reply', () => {
     );
 
     expect(useAppStore.getState().messages['bot:b1']).toHaveLength(2);
+  });
+});
+
+describe('sending a message', () => {
+  beforeEach(reset);
+
+  it('shows the message right away, before the desktop confirms it', () => {
+    useAppStore.getState().sendChatMessage('bot:b1', 'Hello there');
+
+    const messages = useAppStore.getState().messages['bot:b1'];
+    expect(messages).toHaveLength(1);
+    expect(messages?.[0]?.role).toBe('user');
+    expect(messages?.[0]?.text).toBe('Hello there');
+    expect(messages?.[0]?.pending).toBe(true);
+  });
+
+  it('replaces the pending bubble with the committed message instead of adding one', () => {
+    useAppStore.getState().sendChatMessage('bot:b1', 'Hello there');
+    const pending = useAppStore.getState().messages['bot:b1']?.[0];
+    expect(pending?.messageId).toBeTruthy();
+
+    useAppStore.getState().applyFrame(
+      event('evt.message_committed', {
+        message: {
+          messageId: pending!.messageId,
+          chatId: 'bot:b1',
+          role: 'user',
+          text: 'Hello there',
+          ts: 5,
+        },
+      }),
+    );
+
+    const messages = useAppStore.getState().messages['bot:b1'];
+    expect(messages).toHaveLength(1);
+    expect(messages?.[0]?.pending).toBe(false);
+    expect(messages?.[0]?.text).toBe('Hello there');
+  });
+
+  it('takes the bubble back out when the desktop refuses the send', () => {
+    useAppStore.getState().sendChatMessage('bot:b1', 'Hello there');
+    const opId = useAppStore.getState().outbox[0]?.opId;
+    expect(opId).toBeTruthy();
+
+    useAppStore.getState().applyFrame(
+      createFrame({
+        type: 'err',
+        payload: { opId, code: 'AGENT_UNAVAILABLE', message: 'The desktop is busy.', retryable: true },
+        source: 'bridge',
+      }),
+    );
+
+    expect(useAppStore.getState().messages['bot:b1']).toHaveLength(0);
+    expect(useAppStore.getState().optimisticByOp).toEqual({});
+  });
+
+  it('sends the message id it chose, so the desktop can echo it back', () => {
+    useAppStore.getState().sendChatMessage('bot:b1', 'Hello there');
+
+    const queued = useAppStore.getState().outbox[0];
+    const payload = queued?.payload as { clientMessageId?: string };
+    expect(payload.clientMessageId).toBeTruthy();
+    expect(payload.clientMessageId).toBe(useAppStore.getState().messages['bot:b1']?.[0]?.messageId);
   });
 });
 

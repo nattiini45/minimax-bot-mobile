@@ -6,6 +6,7 @@ import { Button } from '../src/components/Button';
 import { Card, SectionHeader } from '../src/components/primitives';
 import { notifySuccess, tapMedium } from '../src/native/haptics';
 import { pairWithCode } from '../src/net/pairing';
+import { isValidRelayUrl } from '../src/net/relay-url';
 import { useTheme } from '../src/theme';
 import { connectRelay, useAppStore } from '../src/state/store';
 
@@ -31,6 +32,11 @@ export default function PairScreen() {
     setBusy(true);
     setErrorState(null);
     try {
+      if (!isValidRelayUrl(relayUrl)) {
+        setErrorState('Enter the relay address, for example https://relay.example.workers.dev');
+        setError('The relay address is not a valid URL.');
+        return;
+      }
       const deviceId = `phone_${Math.random().toString(36).slice(2, 12)}`;
       const result = await pairWithCode({
         url: relayUrl.trim(),
@@ -78,7 +84,7 @@ export default function PairScreen() {
         <TextInput
           value={relayUrl}
           onChangeText={setRelayUrl}
-          placeholder="wss://relay.example.workers.dev"
+          placeholder="https://relay.example.workers.dev"
           placeholderTextColor={theme.colors.subtle}
           autoCapitalize="none"
           autoCorrect={false}
