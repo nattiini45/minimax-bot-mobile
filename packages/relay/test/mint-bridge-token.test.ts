@@ -31,6 +31,17 @@ describe('minting a bridge token', () => {
     // The secret that was offered on the command line is not used, and it is not
     // echoed back either.
     expect(result.stdout).not.toContain('the-secret');
+    expect(result.stderr).not.toContain('the-secret');
+  });
+
+  it('does not echo the secret when it is refused in the equals form', () => {
+    const result = run(['--secret=the-secret', '--bridge-id', 'bridge-1']);
+
+    expect(result.status).toBe(2);
+    // The name of the option is reported, never its value: an unknown option
+    // may well have been a secret.
+    expect(result.stderr).toContain('Unknown option --secret');
+    expect(result.stderr).not.toContain('the-secret');
   });
 
   it('takes the secret from the environment', () => {

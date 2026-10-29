@@ -70,7 +70,10 @@ function parseArgs(argv) {
         options.hours = Number(value) * 24;
         break;
       default:
-        throw new Error(`Unknown option ${key}.`);
+        // The name of the option, never its value: an unknown option may well
+        // have been a secret, and the message would put it into the terminal
+        // scrollback and into whatever collects it.
+        throw new Error(`Unknown option ${key.split('=')[0]}.`);
     }
   }
   return options;
@@ -79,8 +82,10 @@ function parseArgs(argv) {
 /**
  * Reads the relay secret once, from the first source that has it.
  *
- * The secret is not echoed anywhere: only the bridge token is printed, and that
- * one is meant to be copied into the desktop.
+ * The secret is not echoed: only the bridge token is printed, and that one is
+ * meant to be copied into the desktop. An unknown option is reported by its
+ * name alone, so a secret that was offered on the command line does not end up
+ * in the error message.
  */
 function readSecret(options) {
   if (options.secretFile) {

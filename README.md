@@ -147,6 +147,7 @@ RELAY_SECRET=<RELAY_SECRET> npm run mint:token -- --bridge-id <id> --bridge-name
 
 The secret comes from the environment (or from `--secret-file <path>`), never from
 the command line: an argument lands in the shell history and in the process table.
+The `--` before the options matters: npm would otherwise read them as its own.
 
 The client can ship with the relay address already filled in. Expo inlines
 `EXPO_PUBLIC_RELAY_URL` at build time, and the field stays editable, so a
