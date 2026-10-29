@@ -327,7 +327,7 @@ describe('frame routing', () => {
     return { session, deviceSocket, bridgeSocket };
   }
 
-  it('forwards a device frame to the bridge verbatim', async () => {
+  it('forwards a device frame to the bridge with the sender named', async () => {
     const { session, bridgeSocket } = await connected();
     const raw = JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'op.list_team', source: 'app', payload: {} });
 
@@ -336,7 +336,13 @@ describe('frame routing', () => {
       raw,
     );
 
-    expect(bridgeSocket.sent).toEqual([raw]);
+    // The frame is not re-serialised - the relay routes frames, it does not
+    // interpret them - but the sender is named on it, because the desktop has
+    // to know which phone sent it.
+    const forwarded = JSON.parse(bridgeSocket.sent[0]!);
+    expect(forwarded.type).toBe('op.list_team');
+    expect(forwarded.id).toBe('f1');
+    expect(forwarded.from).toBe('device-1');
   });
 
   it('stamps events with a monotonic seq and fans them out', async () => {

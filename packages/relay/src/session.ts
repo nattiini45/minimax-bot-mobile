@@ -836,13 +836,19 @@ export class RelaySession {
     // phone takes the relay's number as the order, so a peer-set number would
     // move the phone's cursor past every frame that follows.
     if (frame.seq !== undefined) return;
+    // The sender is the relay's to say as well. A frame that names one is not a
+    // frame this room accepts: otherwise a phone could send a decision that
+    // claims to be another phone's.
+    if ('from' in frame) return;
 
     if (from.role === 'device') {
       // A device that was revoked while its socket was open must stop being able to
       // drive the desktop.
       const device = this.devices.get(from.subject);
       if (device?.revoked) return;
-      this.sendToBridge(raw);
+      // The desktop has to know which phone sent the frame. A permission
+      // decision is only worth recording if the record says who made it.
+      this.sendToBridge(withSender(raw, from.subject));
       return;
     }
     const prepared = this.prepare(raw, frame);
@@ -973,6 +979,18 @@ function secureRandom(): number {
 async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Names the sender on a frame on its way to the desktop.
+ *
+ * The text is edited rather than re-serialised: re-serialising would round
+ * 64-bit integers, and the relay's job is to route frames, not to interpret
+ * them. The id is escaped, because a phone chooses its own id and it may
+ * contain anything.
+ */
+function withSender(raw: string, deviceId: string): string {
+  return raw.replace(/^(\s*)\{/, `$1{"from":${JSON.stringify(deviceId)},`);
 }
 
 /** Whether the token the caller presented is the one the registry issued. */

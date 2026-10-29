@@ -718,6 +718,127 @@ test('a permission request is held and can be answered', async () => {
   await dispose();
 });
 
+test('a permission decision is recorded against the phone that made it', async () => {
+  const { bridge, dispose } = await makeBridge();
+  const context = bridge.context;
+
+  context.agent.run = async (input, options) => {
+    options?.onEvent?.({
+      type: 'permission.requested',
+      sessionId: 'sess-1',
+      requestId: 'req-1',
+      toolName: 'shell',
+      reason: 'writes a file',
+    });
+    return { sessionId: 'sess-1', turnId: 'turn-1', status: 'finished' };
+  };
+
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+
+  // The relay names the phone that sent the frame: it is the only thing that
+  // knows which socket the frame came from.
+  await bridge.dispatch('op.respond_permission', { requestId: 'req-1', decision: 'allowOnce' }, 'phone_1');
+
+  const decisions = bridge.ledger.recent().filter((entry) => entry.kind === 'permission');
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].requestId, 'req-1');
+  assert.equal(decisions[0].toolName, 'shell');
+  assert.equal(decisions[0].deviceId, 'phone_1');
+  assert.equal(decisions[0].decision, 'allowOnce');
+  assert.ok(decisions[0].ts > 0);
+  await dispose();
+});
+
+test('a permission decision is not counted as usage', async () => {
+  const { bridge, dispose } = await makeBridge();
+  const context = bridge.context;
+
+  context.agent.run = async (input, options) => {
+    options?.onEvent?.({
+      type: 'permission.requested',
+      sessionId: 'sess-1',
+      requestId: 'req-2',
+      toolName: 'shell',
+      reason: 'writes a file',
+    });
+    return { sessionId: 'sess-1', turnId: 'turn-1', status: 'finished' };
+  };
+
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+  await bridge.dispatch('op.respond_permission', { requestId: 'req-2', decision: 'deny' }, 'phone_1');
+
+  // A decision is a record, not a tool call: counting it as one would put it
+  // into the usage totals and into a bot that is not there.
+  const usage = /** @type {UsageResult} */ (await bridge.dispatch('op.get_usage', { days: 7 }));
+  assert.equal(usage.totals.tools, 0);
+  assert.ok(usage.byBot.every((bot) => bot.botId !== 'unknown'));
+  await dispose();
+});
+
+test('a revoked phone is recorded', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.relay.revokeDevice = async () => true;
+
+  await bridge.revokeDevice('phone_1');
+
+  const changes = bridge.ledger.recent().filter((entry) => entry.kind === 'access');
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].action, 'device-revoked');
+  assert.equal(changes[0].subject, 'phone_1');
+  await dispose();
+});
+
+test('a rotated bridge token is recorded', async () => {
+  const { bridge, dispose } = await makeBridge();
+  bridge.relay.rotateToken = async () => 'the-new-token';
+
+  await bridge.rotateToken();
+
+  const changes = bridge.ledger.recent().filter((entry) => entry.kind === 'access');
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].action, 'bridge-token-rotated');
+  assert.equal(changes[0].subject, 'bridge-1');
+  await dispose();
+});
+
+test('a ledger that cannot be written does not make the decision look failed', async () => {
+  const { bridge, agentReplies, dispose } = await makeBridge();
+  const context = bridge.context;
+
+  context.agent.run = async (input, options) => {
+    options?.onEvent?.({
+      type: 'permission.requested',
+      sessionId: 'sess-1',
+      requestId: 'req-3',
+      toolName: 'shell',
+      reason: 'writes a file',
+    });
+    return { sessionId: 'sess-1', turnId: 'turn-1', status: 'finished' };
+  };
+
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+
+  // The disk is full.
+  bridge.ledger.persist = async () => {
+    throw new Error('the disk is full');
+  };
+
+  const result = await bridge.dispatch(
+    'op.respond_permission',
+    { requestId: 'req-3', decision: 'allowOnce' },
+    'phone_1',
+  );
+
+  // The Host was told the decision, so the phone must not be told it failed.
+  assert.equal(agentReplies.length, 1);
+  assert.equal(result.decision, 'allowOnce');
+  // And the record is still there for the session.
+  const decisions = bridge.ledger.recent().filter((entry) => entry.kind === 'permission');
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].deviceId, 'phone_1');
+  await dispose();
+});
+
 test('a pending approval is replayed when a phone resumes', async () => {
   const { bridge, sent, dispose } = await makeBridge();
   bridge.context.agent.run = async (input, options) => {

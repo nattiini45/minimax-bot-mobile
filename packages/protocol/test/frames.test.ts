@@ -79,6 +79,13 @@ describe('frame validation', () => {
     expect(() => assertFrame({ ...base, source: 'nobody' })).toThrow(/frame.source/);
   });
 
+  it('rejects a sender that is not a string', () => {
+    // The sender is the relay's to say, so it has to be a name and not a
+    // number that happens to be there.
+    expect(() => assertFrame({ ...base, from: 7 })).toThrow(/frame.from/);
+    expect(() => assertFrame({ ...base, from: 'phone_1' })).not.toThrow();
+  });
+
   it('rejects a non-finite timestamp', () => {
     expect(() => assertFrame({ ...base, ts: Number.NaN })).toThrow(/frame.ts/);
   });

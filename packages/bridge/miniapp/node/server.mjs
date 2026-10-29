@@ -203,7 +203,7 @@ export async function handle(request, response, deps) {
     } catch {
       return json(response, 400, { error: 'bad_request', message: 'Malformed device id.' });
     }
-    const revoked = await bridge.relay.revokeDevice(deviceId);
+    const revoked = await bridge.revokeDevice(deviceId);
     return json(response, revoked ? 200 : 404, { revoked });
   }
 

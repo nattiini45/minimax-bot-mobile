@@ -51,6 +51,14 @@ export interface Frame<TPayload = unknown> {
   payload: TPayload;
   /** Monotonic per-bridge sequence number; set by the relay on forwarded events. */
   seq?: number;
+  /**
+   * The peer the relay says sent this frame; set by the relay, never by a peer.
+   *
+   * It is how the desktop knows which phone asked for something. A peer that
+   * carries one has its frame dropped: the relay is the only thing that knows
+   * which socket a frame came from.
+   */
+  from?: string;
   /** Frame id this frame answers. */
   in_reply_to?: string;
   /** Idempotency key. Repeating an op with the same `opId` must not repeat its effect. */
