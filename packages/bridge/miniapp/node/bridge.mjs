@@ -448,9 +448,18 @@ export class Bridge {
     if (!frame.type.startsWith('op.')) return;
 
     const opId = frame.opId ?? frame.id;
-    // The cache key includes the operation type: two different operations must never
-    // share a result, even if they arrive with the same opId.
-    const cacheKey = `${frame.type}:${opId}`;
+    // An operation without an id cannot be answered, and its cache key would be the
+    // same for every frame of its type - so one such frame would silence that
+    // operation for the whole account, and every later frame of that type would be
+    // answered with its result. It is refused instead of being run.
+    if (!opId) {
+      this.replyError(frame, codedError('INVALID_ARGUMENTS', 'An operation must carry an opId.'));
+      return;
+    }
+    // The cache key includes the operation type and the sender: two different
+    // operations must never share a result, and one device's operation must never
+    // swallow another device's when the two operation ids happen to be the same.
+    const cacheKey = `${frame.type}:${frame.from ?? ''}:${opId}`;
 
     const cached = this.opCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
