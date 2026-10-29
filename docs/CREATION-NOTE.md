@@ -104,7 +104,6 @@ The relay is a deployed Cloudflare Worker, not a script on my laptop:
 - **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io>
 - **Relay:** <https://minimax-bot-relay.nattiini45.workers.dev>
 - **Demo video:** <https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4>
-- **Android APK:** <https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk>
 
 A published build names its relay through `EXPO_PUBLIC_RELAY_URL`, which Expo inlines at build
 time, so the link above opens a client that already knows where to go — a stranger types the
@@ -118,8 +117,14 @@ no error frames in the replay**.
 - The relay keeps its state in memory, so a restart unpairs every phone. Both ends handle it.
 - The team's task tool answers for one batch at a time, so a task list is explicitly partial —
   the phone says so instead of looking complete.
-- The release APK is signed with the Expo template's debug keystore. The native build needs
-  Linux (RN 0.88 hits the 260-character path limit on Windows).
+- The `v0.1.0` APK was signed with the Expo template's debug keystore. That keystore
+  is a well-known value, so anyone can produce an APK with the same signing identity
+  and the operating system would take it as an update to an installed one. The asset
+  has been withdrawn.
+- A release is signed with a private key now. The build refuses to run without it,
+  and it checks the certificate of the artefact it produced before the build is
+  allowed to pass. The native build needs Linux (RN 0.88 hits the 260-character path
+  limit on Windows).
 
 ---
 
