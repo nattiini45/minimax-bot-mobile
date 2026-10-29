@@ -238,4 +238,32 @@ test('the secret is only handed to a caller that names the bridge', async () => 
 
   assert.equal(response.status, 200);
   assert.equal(response.body.includes(SECRET), true);
+
+  // ... and to nobody else.
+  const refused = fakeResponse();
+  await handle(
+    fakeRequest('GET', '/api/session', { headers: { host: 'evil.example:53378' } }),
+    refused,
+    makeDeps(),
+  );
+
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body.includes(SECRET), false);
+});
+
+test('a mutating request has to be a json body', async () => {
+  // The content type is what makes a cross-site request trigger a preflight,
+  // and the bridge answers no preflight. Without it, a cross-site form post
+  // would reach the bridge with the secret attached.
+  const response = fakeResponse();
+  await handle(
+    fakeRequest('POST', '/api/config', {
+      headers: { 'content-type': 'text/plain', 'x-bridge-secret': SECRET },
+      body: { relayUrl: 'https://other.example.workers.dev' },
+    }),
+    response,
+    makeDeps(),
+  );
+
+  assert.equal(response.status, 403);
 });

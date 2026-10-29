@@ -43,31 +43,45 @@ export function checkCaller(request, surface) {
   if (!address) {
     return { ok: false, message: 'The request did not name the bridge.' };
   }
-  if (!isLoopbackHost(address.hostname)) {
-    return { ok: false, message: 'This request was not addressed to this machine.' };
+  if (!isAssignedHost(address.hostname, surface.host)) {
+    return { ok: false, message: 'This request was not addressed to this bridge.' };
   }
   if (address.port !== surface.port) {
     return { ok: false, message: 'This request was not addressed to this bridge.' };
   }
 
   const origin = headers['origin'];
-  if (typeof origin === 'string' && origin.length > 0 && origin !== 'null') {
+  if (typeof origin === 'string' && origin.length > 0) {
+    // The origin has to be the origin the request was sent to. A page on
+    // another origin is another page, whatever it calls itself.
     let from = null;
     try {
       from = new URL(origin);
     } catch {
       return { ok: false, message: 'This request came from somewhere else.' };
     }
-    if (!isLoopbackHost(from.hostname) || Number(from.port) !== surface.port) {
+    if (from.protocol !== 'http:' && from.protocol !== 'https:') {
+      // `null` - an opaque origin, which is what a sandboxed page sends - and
+      // `file:` are not origins a page on this surface can have.
+      return { ok: false, message: 'This request came from somewhere else.' };
+    }
+    if (Number(from.port) !== surface.port) {
+      return { ok: false, message: 'This request came from somewhere else.' };
+    }
+    if (normalise(from.hostname) !== normalise(address.hostname)) {
       return { ok: false, message: 'This request came from somewhere else.' };
     }
   }
 
   // The browser says where the request came from, and a cross-site request is
-  // exactly what the two checks above are about.
+  // exactly what the two checks above are about. A repeated header is joined
+  // with a comma, so the value is read as a list.
   const fetchSite = headers['sec-fetch-site'];
-  if (typeof fetchSite === 'string' && fetchSite === 'cross-site') {
-    return { ok: false, message: 'This request came from somewhere else.' };
+  if (typeof fetchSite === 'string') {
+    const sites = fetchSite.split(',').map((site) => site.trim().toLowerCase());
+    if (sites.includes('cross-site')) {
+      return { ok: false, message: 'This request came from somewhere else.' };
+    }
   }
 
   return { ok: true };
@@ -100,22 +114,49 @@ function parseHost(value) {
 }
 
 /**
- * Whether a hostname names this machine.
+ * Whether a hostname names the address the Host assigned to the bridge.
  *
- * The bridge binds loopback, so the only hostnames that can name it are the
- * loopback address and the names that mean it. A name that merely *contains* a
- * loopback address — `127.0.0.1.example.com` — names somewhere else.
+ * The surface is served from that address, so it is the only hostname a
+ * legitimate request carries. `localhost` is accepted as well when the assigned
+ * address is a loopback one, because it names the same machine.
+ *
+ * A name that merely *contains* a loopback address — `127.0.0.1.example.com` —
+ * names somewhere else, and so does another loopback address: the bridge is
+ * reachable on the one the Host assigned, not on every one.
+ *
+ * @param {string} hostname
+ * @param {string} assigned
+ * @returns {boolean}
+ */
+function isAssignedHost(hostname, assigned) {
+  const host = normalise(hostname);
+  const want = normalise(assigned);
+  if (host === want) return true;
+  return want !== 'localhost' && isLoopbackHost(want) && host === 'localhost';
+}
+
+/**
+ * Whether a hostname names this machine.
  *
  * @param {string} hostname
  * @returns {boolean}
  */
 function isLoopbackHost(hostname) {
-  const host = String(hostname ?? '')
-    .toLowerCase()
-    .replace(/^\[/, '')
-    .replace(/\]$/, '');
+  const host = normalise(hostname).replace(/^\[/, '').replace(/\]$/, '');
   if (host === 'localhost') return true;
   if (host === '::1') return true;
   // 127.0.0.0/8 is loopback.
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+/**
+ * A hostname as a name, without the case.
+ *
+ * @param {string} hostname
+ * @returns {string}
+ */
+function normalise(hostname) {
+  return String(hostname ?? '')
+    .trim()
+    .toLowerCase();
 }
