@@ -9,6 +9,14 @@
 /** Mirrors the Host's agent concurrency ceiling. */
 export const MAX_CONCURRENT_RUNS = 32;
 
+/**
+ * How many Host conversations the runner keeps open at once.
+ *
+ * A conversation is keyed by the chat id a client chose, so without a ceiling a client
+ * that keeps inventing chats makes the desktop hold a Host session for each of them.
+ */
+export const MAX_HOST_SESSIONS = 50;
+
 export class AgentRunner {
   /**
    * @param {object} context the Mini App context
@@ -115,6 +123,14 @@ export class AgentRunner {
 
       if (result.sessionId) {
         this.sessions.set(chatId, result.sessionId);
+        // The chat id is chosen by the client, so the number of Host conversations the
+        // desktop keeps open is a ceiling and not a promise. The least recently used one
+        // is forgotten: a chat that comes back starts a new conversation.
+        while (this.sessions.size > MAX_HOST_SESSIONS) {
+          const oldest = this.sessions.keys().next();
+          if (oldest.done) break;
+          this.sessions.delete(oldest.value);
+        }
       }
 
       // A run can end waiting on a questionnaire without an event having fired.
