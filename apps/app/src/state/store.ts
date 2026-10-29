@@ -11,6 +11,13 @@ import type { Frame } from '@minimax-bot/protocol';
 import { create } from 'zustand';
 
 import { CLOSE_DEVICE_REVOKED, RelayClient, type ConnectionStatus } from '../net/relay-client';
+import { isValidRelayUrl, relayOrigin } from '../net/relay-url';
+import {
+  clearDeviceToken,
+  loadDeviceOrigin,
+  loadDeviceToken,
+  saveDeviceToken,
+} from './credential-store';
 
 export interface Session {
   relayUrl: string;
@@ -18,6 +25,20 @@ export interface Session {
   deviceId: string;
   deviceToken: string;
   deviceName: string;
+}
+
+/**
+ * The session as it is kept on disk: everything but the token.
+ *
+ * The token is only here for a phone that paired before it moved to the
+ * keystore, and it is written out again without it the first time it is read.
+ */
+interface StoredSession {
+  relayUrl: string;
+  accountId: string;
+  deviceId: string;
+  deviceName: string;
+  deviceToken?: string;
 }
 
 export interface OutboxItem {
@@ -329,19 +350,76 @@ function applyOperationResult(
   }
 }
 
-async function persistSession(session: Session | null) {
+/**
+ * Writes the session down, or throws it away.
+ *
+ * Exported so the persistence can be tested without a running app.
+ */
+export async function persistSession(session: Session | null) {
   if (!session) {
     await AsyncStorage.removeItem(SESSION_KEY);
+    await clearDeviceToken();
     return;
   }
-  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  // The token is the one secret in the session, and it goes to the keystore. The
+  // rest is not a credential and stays where the app can read it.
+  const { deviceToken, ...rest } = session;
+  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest));
+  await saveDeviceToken(deviceToken, relayOrigin(session.relayUrl));
 }
 
+/**
+ * Reads the session back.
+ *
+ * The relay address is checked again on the way in: a stored value that was
+ * tampered with must not be able to send the device token to another host.
+ */
 export async function loadSession(): Promise<Session | null> {
   try {
     const raw = await AsyncStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as Session;
+    const stored = JSON.parse(raw) as StoredSession;
+    if (!stored || typeof stored !== 'object') return null;
+
+    if (typeof stored.relayUrl !== 'string' || !isValidRelayUrl(stored.relayUrl)) {
+      // The address is not one the app may use, so the token is not used with it
+      // either: the session is dropped and the phone has to pair again.
+      await persistSession(null);
+      return null;
+    }
+
+    let token = await loadDeviceToken();
+    const origin = await loadDeviceOrigin();
+
+    if (!token && typeof stored.deviceToken === 'string' && stored.deviceToken.length > 0) {
+      // A phone that paired before the token moved to the keystore.
+      token = stored.deviceToken;
+      await saveDeviceToken(token, relayOrigin(stored.relayUrl));
+    }
+    if (!token) return null;
+
+    // The address the token was minted for is remembered beside the token. If the
+    // address in the plain store names another relay now, the store was changed
+    // by something that is not this app, and the token is not presented there.
+    if (origin && origin !== relayOrigin(stored.relayUrl)) {
+      await persistSession(null);
+      return null;
+    }
+
+    const session: Session = {
+      relayUrl: stored.relayUrl,
+      accountId: typeof stored.accountId === 'string' ? stored.accountId : 'default',
+      deviceId: typeof stored.deviceId === 'string' ? stored.deviceId : '',
+      deviceName: typeof stored.deviceName === 'string' ? stored.deviceName : 'Phone',
+      deviceToken: token,
+    };
+
+    // The record is written back without the token, so the plain text copy is
+    // gone even if the phone paired before this change.
+    const { deviceToken: _dropped, ...clean } = session;
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(clean));
+
+    return session;
   } catch {
     return null;
   }
