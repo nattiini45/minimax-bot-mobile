@@ -59,6 +59,94 @@ export async function saveConfig(dataDir, config) {
   await writeFile(join(dataDir, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 }
 
+/**
+ * The scheme each transport uses, so that one relay address names one relay.
+ *
+ * The frame channel is a WebSocket and the pairing request is an HTTP POST, and the
+ * operator is given a single address. `wss://` and `https://` therefore name the
+ * same relay, and the token it carries must not be able to travel from one to the
+ * other unnoticed.
+ */
+const TO_HTTP = {
+  'http:': 'http:',
+  'https:': 'https:',
+  'ws:': 'http:',
+  'wss:': 'https:',
+};
+
+/**
+ * The origin of a relay address, in its HTTP form, or `''` when the address is
+ * not a relay address.
+ *
+ * Two addresses with the same origin are the same relay, so a token minted for one
+ * of them is a token for the other.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+export function relayOrigin(value) {
+  const trimmed = String(value ?? '').trim().replace(/\/+$/, '');
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(trimmed);
+  if (!match) return '';
+  const scheme = match[1].toLowerCase();
+  const target = TO_HTTP[scheme];
+  if (!target) return '';
+  try {
+    return new URL(target + trimmed.slice(scheme.length)).origin;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Whether the bridge may talk to this relay address.
+ *
+ * The bridge holds the long-lived bridge token, so it is strict about where that
+ * token goes. A secure relay is fine wherever it is; a cleartext one is only the
+ * relay on this machine, because anything else on the network would read the token
+ * off the wire. A LAN address, a link-local address and a metadata address are all
+ * refused: they are the addresses that are reachable but not meant to be trusted.
+ *
+ * @param {string} value
+ * @returns {boolean}
+ */
+export function isAllowedRelayUrl(value) {
+  const trimmed = String(value ?? '').trim();
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(trimmed);
+  if (!match) return false;
+  const scheme = match[1].toLowerCase();
+
+  if (scheme === 'https:' || scheme === 'wss:') {
+    try {
+      new URL(trimmed);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (scheme !== 'http:' && scheme !== 'ws:') return false;
+
+  // Cleartext is the local relay and nothing else.
+  try {
+    return isLoopbackHost(new URL(trimmed).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} hostname
+ * @returns {boolean}
+ */
+function isLoopbackHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost') return true;
+  if (host === '::1') return true;
+  // 127.0.0.0/8 is loopback.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
 function randomId() {
   const cryptoObj = globalThis.crypto;
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
