@@ -801,7 +801,46 @@ test('a rotated bridge token is recorded', async () => {
   await dispose();
 });
 
-test('a pending approval is replayed when a phone resumes', async () => {  const { bridge, sent, dispose } = await makeBridge();
+test('a ledger that cannot be written does not make the decision look failed', async () => {
+  const { bridge, agentReplies, dispose } = await makeBridge();
+  const context = bridge.context;
+
+  context.agent.run = async (input, options) => {
+    options?.onEvent?.({
+      type: 'permission.requested',
+      sessionId: 'sess-1',
+      requestId: 'req-3',
+      toolName: 'shell',
+      reason: 'writes a file',
+    });
+    return { sessionId: 'sess-1', turnId: 'turn-1', status: 'finished' };
+  };
+
+  await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+
+  // The disk is full.
+  bridge.ledger.persist = async () => {
+    throw new Error('the disk is full');
+  };
+
+  const result = await bridge.dispatch(
+    'op.respond_permission',
+    { requestId: 'req-3', decision: 'allowOnce' },
+    'phone_1',
+  );
+
+  // The Host was told the decision, so the phone must not be told it failed.
+  assert.equal(agentReplies.length, 1);
+  assert.equal(result.decision, 'allowOnce');
+  // And the record is still there for the session.
+  const decisions = bridge.ledger.recent().filter((entry) => entry.kind === 'permission');
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].deviceId, 'phone_1');
+  await dispose();
+});
+
+test('a pending approval is replayed when a phone resumes', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
   bridge.context.agent.run = async (input, options) => {
     options?.onEvent?.({
       type: 'permission.requested',

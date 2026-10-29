@@ -25,10 +25,16 @@ forwards. Every decision about the team is made on the desktop.
   "source": "app",         // app | bridge | relay
   "payload": { "chatId": "bot:chief", "text": "hello" },
   "seq": 42,               // optional; assigned by the relay on evt.* frames
+  "from": "phone_1",       // optional; assigned by the relay on frames from a phone
   "in_reply_to": "f_9c1e…",// optional; the frame this one answers
   "opId": "op_1753…_a91f"  // optional; idempotency key
 }
 ```
+
+`from` is how the desktop knows which phone sent a frame — it is what makes a
+permission decision attributable. The relay sets it, because the relay is the
+only thing that knows which socket a frame came from; a peer that carries one has
+its frame dropped.
 
 `decodeFrame` enforces exactly the fields the relay relies on: `v`, `id`, `type`,
 `source`, `ts`, `payload`, and the types of the optional fields. It deliberately does

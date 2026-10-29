@@ -459,6 +459,28 @@ export class Bridge {
   }
 
   /**
+   * Writes the ledger down, without failing the caller.
+   *
+   * The ledger is a record of what happened, not the thing that happened: a
+   * decision that has been applied must not be undone by a disk that cannot be
+   * written, and the caller must not be told that the work failed when it did
+   * not. The entry stays in memory, so it is still there for the session.
+   *
+   * @param {string} what what was being recorded, for the log
+   */
+  async persistLedger(what) {
+    try {
+      await this.ledger.persist();
+    } catch (error) {
+      this.logger.warn(
+        `the ledger could not be written, so ${what} is not on disk: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Revokes a paired phone.
    *
    * The revocation is written down with the decisions: it is a change to who may
@@ -473,7 +495,7 @@ export class Bridge {
         subject: deviceId,
         detail: 'the phone cannot reach the relay any more',
       });
-      await this.ledger.persist();
+      await this.persistLedger('the revocation');
     }
     return revoked;
   }
@@ -544,7 +566,11 @@ export class Bridge {
           deviceId: from ?? 'unknown',
           decision: payload.decision,
         });
-        await this.ledger.persist();
+        // The decision has already been applied - the Host has allowed or
+        // refused the tool call - so a ledger that cannot be written must not
+        // make the phone think the decision failed. The phone would be told
+        // "failed" while the tool ran, which is worse than a missing record.
+        await this.persistLedger('the permission decision');
         return { requestId: payload.requestId, decision: payload.decision };
       }
       case 'op.answer_question':
@@ -883,7 +909,7 @@ export class Bridge {
       subject: this.config?.bridgeId ?? 'unknown',
       detail: 'the previous bridge token was revoked',
     });
-    await this.ledger.persist();
+    await this.persistLedger('the token rotation');
     if (this.onToken) await this.onToken(token);
     this.logger.info('the bridge token was rotated');
     return token;

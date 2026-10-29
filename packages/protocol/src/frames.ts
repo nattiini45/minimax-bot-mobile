@@ -107,6 +107,9 @@ export function assertFrame(value: unknown): Frame {
   if (value.seq !== undefined && (typeof value.seq !== 'number' || !Number.isInteger(value.seq))) {
     throw new FrameError('BAD_SEQ', 'frame.seq must be an integer when present');
   }
+  if (value.from !== undefined && typeof value.from !== 'string') {
+    throw new FrameError('BAD_FROM', 'frame.from must be a string when present');
+  }
   if (value.in_reply_to !== undefined && typeof value.in_reply_to !== 'string') {
     throw new FrameError('BAD_IN_REPLY_TO', 'frame.in_reply_to must be a string when present');
   }
