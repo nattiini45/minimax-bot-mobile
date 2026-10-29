@@ -16,10 +16,9 @@ const MAX_BODY = 256 * 1024;
 
 export async function start(context) {
   const logger = context.logger;
-  let config = await loadConfig(context.dataDir);
+  const config = await loadConfig(context.dataDir);
 
   const bridge = new Bridge(context, { config, logger });
-  await bridge.start();
 
   /**
    * The secret that proves a mutating request came from the desktop surface.
@@ -29,30 +28,38 @@ export async function start(context) {
    */
   const secret = randomBytes(32).toString('hex');
 
+  /**
+   * Writes the configuration and hands it to the live bridge.
+   *
+   * @param {import('./config.mjs').BridgeConfig} next
+   */
+  const setConfig = async (next) => {
+    await saveConfig(context.dataDir, next);
+    bridge.config = next;
+    bridge.relay.url = next.relayUrl;
+    bridge.relay.accountId = next.accountId;
+    bridge.relay.bridgeId = next.bridgeId;
+    bridge.relay.token = next.bridgeToken;
+    bridge.relay.name = next.bridgeName;
+    bridge.relay.start();
+  };
+
   const server = createServer((request, response) => {
-    handle(request, response, { bridge, context, secret, getConfig: () => config, setConfig: async (next) => {
-      config = next;
-      await saveConfig(context.dataDir, next);
-      bridge.config = next;
-      bridge.relay.url = next.relayUrl;
-      bridge.relay.accountId = next.accountId;
-      bridge.relay.bridgeId = next.bridgeId;
-      bridge.relay.token = next.bridgeToken;
-      bridge.relay.name = next.bridgeName;
-      bridge.relay.start();
-    } }).catch((error) => {
+    // The bridge's own configuration is the live one: a rotated token changes it,
+    // and the surface must not answer with a token the relay has already revoked.
+    handle(request, response, {
+      bridge,
+      context,
+      secret,
+      getConfig: () => bridge.config,
+      setConfig,
+    }).catch((error) => {
       logger.error(`request failed: ${error instanceof Error ? error.message : error}`);
       json(response, 500, { error: 'internal' });
     });
   });
 
-  // A rotated token is persisted the same way a configured one is, so the surface
-  // and the bridge never disagree about which token is live.
-  bridge.onToken = async (token) => {
-    await saveConfig(context.dataDir, { ...config, bridgeToken: token });
-    config = { ...config, bridgeToken: token };
-    bridge.config = config;
-  };
+  await bridge.start();
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
