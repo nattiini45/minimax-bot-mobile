@@ -176,7 +176,7 @@ export default {
         return json({ error: 'bad_request', message: 'Expected POST or DELETE.' }, 400);
       }
 
-      if (rest[0] === 'devices' && rest[1] && request.method === 'GET') {
+      if (rest[0] === 'devices' && request.method === 'GET') {
         // The device list carries credentials, so it is bridge-only. The phone never
         // needs it; the desktop is the one that shows the paired devices.
         const authorized = await authorizeBridge(request, stub, accountId, env.RELAY_SECRET);
@@ -189,6 +189,27 @@ export default {
           return rest;
         });
         return json({ devices }, 200);
+      }
+
+      // A phone releases its own credential.
+      //
+      // Unpairing on the phone has to reach the relay: a phone that only forgets
+      // its own token leaves a working credential behind, and the owner believes
+      // the device is gone.
+      //
+      // The token names the device, so there is nothing else to check - a device
+      // may only revoke itself.
+      if (rest[0] === 'devices' && rest[1] === 'me' && request.method === 'DELETE') {
+        const token = bearer(request);
+        const payload = await verifyToken(token, env.RELAY_SECRET);
+        if (!payload || payload.role !== 'device') {
+          return relayError('UNAUTHORIZED', 'The device token is not valid.', 401);
+        }
+        const released = await stub.releaseDevice(payload.sub, token);
+        if (!released) {
+          return relayError('UNAUTHORIZED', 'The device token is not valid.', 401);
+        }
+        return json({ ok: true, released: true }, 200);
       }
 
       if (rest[0] === 'devices' && rest[1] && request.method === 'DELETE') {

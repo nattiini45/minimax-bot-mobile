@@ -90,6 +90,15 @@ export class Relay extends DurableObject<RelayEnv> {
     return this.session.revokeDevice(deviceId);
   }
 
+  /**
+   * A device releases its own token.
+   *
+   * The token has to be the one this account's registry issued to that device.
+   */
+  releaseDevice(deviceId: string, token: string): boolean {
+    return this.session.releaseDevice(deviceId, token);
+  }
+
   listDevices() {
     return this.session.listDevices();
   }

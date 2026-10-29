@@ -327,6 +327,22 @@ export class RelaySession {
     return true;
   }
 
+  /**
+   * A device releases its own token.
+   *
+   * The token identifies the device, so a device may only revoke itself. The token
+   * has to be the one the registry issued to that device: a token from another
+   * account must not revoke a device that happens to carry the same id.
+   *
+   * @param deviceId The device the token names.
+   * @param token The token the caller presented.
+   */
+  releaseDevice(deviceId: string, token: string): boolean {
+    const device = this.devices.get(deviceId);
+    if (!device || device.token !== token) return false;
+    return this.revokeDevice(deviceId);
+  }
+
   listDevices(): DeviceRecord[] {
     return [...this.devices.values()].map((device) => ({ ...device }));
   }

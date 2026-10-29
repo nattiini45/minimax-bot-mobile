@@ -12,6 +12,7 @@ import { create } from 'zustand';
 
 import { CLOSE_DEVICE_REVOKED, RelayClient, type ConnectionStatus } from '../net/relay-client';
 import { isValidRelayUrl, relayOrigin } from '../net/relay-url';
+import { releaseDevice } from '../net/release';
 import {
   clearDeviceToken,
   loadDeviceOrigin,
@@ -990,4 +991,25 @@ export function connectRelay(session: Session): RelayClient {
 export function disconnectRelay(): void {
   client?.disconnect();
   client = null;
+}
+
+/**
+ * Unpairs this phone.
+ *
+ * The relay is told first: a phone that only forgets its own token leaves a
+ * working credential behind on the relay, and the owner believes the device is
+ * gone.
+ *
+ * @returns whether the relay released the token.
+ */
+export async function unpairPhone(): Promise<boolean> {
+  const session = useAppStore.getState().session;
+  disconnectRelay();
+  if (!session) return false;
+
+  const released = await releaseDevice(session.relayUrl, session.accountId, session.deviceToken);
+  // The phone forgets the token either way: the local copy is the one the owner
+  // asked to be gone.
+  useAppStore.getState().setSession(null);
+  return released;
 }
