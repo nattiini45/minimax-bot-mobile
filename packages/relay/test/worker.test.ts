@@ -28,6 +28,8 @@ function fakeStub(overrides: Record<string, unknown> = {}) {
     listDevices: vi.fn(async () => [{ deviceId: 'device-1', deviceName: 'Phone', token: 'secret' }]),
     revokeDevice: vi.fn(async () => true),
     releaseDevice: vi.fn(async () => true),
+    issueTicket: vi.fn(async () => ({ ticket: 'the-ticket', expiresAt: 0 })),
+    fetch: vi.fn(async () => new Response(null, { status: 200 })),
     isBridgeTokenRevoked: vi.fn(async () => false),
     ownerBridgeId: vi.fn(async () => 'bridge-1'),
     rotateBridgeToken: vi.fn(async () => ({ token: 'rotated', expiresAt: 0 })),
@@ -163,6 +165,99 @@ describe('the device list', () => {
 
     expect(response.status).toBe(401);
     expect(stub.listDevices).not.toHaveBeenCalled();
+  });
+});
+
+describe('a peer asking for a ticket', () => {
+  it('gets one for its device', async () => {
+    const stub = fakeStub();
+    const token = await deviceToken('device-1');
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ticket?: string };
+    expect(body.ticket).toBe('the-ticket');
+    // The room decides, and it is told which credential the ticket stands for.
+    expect(stub.issueTicket).toHaveBeenCalledWith('device-1', 'device', token, ACCOUNT);
+  });
+
+  it('gets one for its bridge', async () => {
+    const stub = fakeStub();
+    const token = await bridgeToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(200);
+    expect(stub.issueTicket).toHaveBeenCalledWith('bridge-1', 'bridge', token, ACCOUNT);
+  });
+
+  it('is refused without a token', async () => {
+    const stub = fakeStub();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/ws-ticket`, { method: 'POST' }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.issueTicket).not.toHaveBeenCalled();
+  });
+
+  it('is refused when the room does not know the credential', async () => {
+    const stub = fakeStub({ issueTicket: vi.fn(async () => null) });
+    const token = await deviceToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+  });
+});
+
+describe('the WebSocket upgrade', () => {
+  it('accepts a ticket in place of the token', async () => {
+    const stub = fakeStub();
+    const { token } = await issueToken('device-1', 'device', 60_000, SECRET, { ticket: true });
+
+    const response = await worker.fetch(
+      new Request(
+        `https://relay.example/r/${ACCOUNT}/ws?role=device&subject=device-1&ticket=${encodeURIComponent(token)}`,
+      ),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(200);
+    expect(stub.fetch).toHaveBeenCalled();
+  });
+
+  it('refuses a ticket that is not one', async () => {
+    const stub = fakeStub();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/ws?role=device&subject=device-1&ticket=nonsense`),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.fetch).not.toHaveBeenCalled();
   });
 });
 

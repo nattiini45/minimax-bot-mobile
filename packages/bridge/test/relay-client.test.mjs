@@ -56,6 +56,70 @@ test('the endpoint carries the role, the subject and the token', () => {
   assert.equal(url.searchParams.get('token'), 'a token');
 });
 
+test('the endpoint carries a ticket instead of the token when there is one', () => {
+  const client = new RelayClient({
+    url: 'http://127.0.0.1:8787',
+    accountId: 'default',
+    bridgeId: 'bridge-1',
+    token: 'a token',
+    logger: LOGGER,
+  });
+  const url = new URL(client.endpoint('the-ticket'));
+  assert.equal(url.searchParams.get('ticket'), 'the-ticket');
+  // The token itself does not travel in the URL.
+  assert.equal(url.searchParams.get('token'), null);
+});
+
+test('the ticket is asked for over a request that can carry a header', async () => {
+  const seen = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), init });
+    return new Response(JSON.stringify({ ticket: 'the-ticket' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    const client = new RelayClient({
+      url: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      bridgeId: 'bridge-1',
+      token: 'tok',
+      logger: LOGGER,
+    });
+
+    const ticket = await client.fetchTicket();
+
+    assert.equal(ticket, 'the-ticket');
+    assert.equal(seen[0].url, 'https://relay.example.workers.dev/r/default/ws-ticket');
+    assert.equal(seen[0].init.headers.authorization, 'Bearer tok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('a relay that does not offer tickets leaves the token where it was', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('nope', { status: 404 });
+
+  try {
+    const client = new RelayClient({
+      url: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      bridgeId: 'bridge-1',
+      token: 'tok',
+      logger: LOGGER,
+    });
+
+    assert.equal(await client.fetchTicket(), null);
+    assert.equal(new URL(client.endpoint(null)).searchParams.get('token'), 'tok');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('the pairing request is sent over http even when the relay is addressed as ws', async () => {
   const seen = [];
   const originalFetch = globalThis.fetch;

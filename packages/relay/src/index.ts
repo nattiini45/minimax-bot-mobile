@@ -78,8 +78,12 @@ export default {
 
     try {
       if (rest[0] === 'ws') {
-        // The WebSocket upgrade must carry its own auth in the query string, because the
-        // browser WebSocket API cannot set headers.
+        // The WebSocket upgrade has to carry the peer's credential, and the
+        // browser WebSocket API cannot set a header - so it travels in the query
+        // string, which is the part of a request that proxies and log pipelines
+        // keep. A peer that has shown its credential elsewhere asks for a ticket
+        // first, and the ticket is what rides in the URL: it is good for one
+        // connection and for half a minute.
         //
         // The token is checked here as well as in the Durable Object. This is the cheap
         // check: it refuses a bridge token that was minted for another account before
@@ -90,7 +94,8 @@ export default {
         // A device token carries no account claim. The relay scopes a device by the
         // device registry of the account's own object, and that check lives there.
         const requestedRole = url.searchParams.get('role');
-        const payload = await verifyToken(url.searchParams.get('token') ?? '', env.RELAY_SECRET);
+        const credential = url.searchParams.get('ticket') ?? url.searchParams.get('token') ?? '';
+        const payload = await verifyToken(credential, env.RELAY_SECRET);
         if (!payload || payload.role !== requestedRole) {
           return json({ error: 'unauthorized', message: 'The token is not valid.' }, 401);
         }
@@ -102,6 +107,24 @@ export default {
         }
         const upgraded = await stub.fetch(request);
         return upgraded;
+      }
+
+      // A peer asks for a ticket for its next connection.
+      //
+      // The peer shows its credential here, over an ordinary request that can
+      // carry a header, and gets back something that may travel in a URL.
+      if (rest[0] === 'ws-ticket' && request.method === 'POST') {
+        const token = bearer(request);
+        const payload = await verifyToken(token, env.RELAY_SECRET);
+        if (!payload) {
+          return relayError('UNAUTHORIZED', 'The token is not valid.', 401);
+        }
+        // The room decides whether the credential is one it accepts.
+        const result = await stub.issueTicket(payload.sub, payload.role, token, accountId);
+        if (!result) {
+          return relayError('UNAUTHORIZED', 'The token is not valid.', 401);
+        }
+        return json({ ok: true, ticket: result.ticket, expiresAt: result.expiresAt }, 200);
       }
 
       if (rest[0] === 'pair' && rest[1] === 'code' && request.method === 'POST') {
