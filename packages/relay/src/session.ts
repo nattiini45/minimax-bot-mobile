@@ -142,9 +142,37 @@ export interface SessionStatus {
 }
 
 const DEFAULT_RING_CAPACITY = 512;
-/** Wrong pairing codes allowed per window before the endpoint starts refusing. */
-const MAX_PAIR_ATTEMPTS = 10;
-const PAIR_BLOCK_MS = 60 * 1000;
+
+/**
+ * Wrong pairing codes allowed per window before the account starts refusing.
+ *
+ * The budget is spent by codes that were *distinct*: a code that is guessed again and
+ * again is charged to its own budget below, so hammering one code cannot use up the
+ * account's. The window is short, because the budget is shared between the owner's
+ * phone and whoever is guessing: a long block is a block on the real user.
+ *
+ * Three codes per fifteen seconds is the same number of tries a minute that the
+ * account allowed before, so the owner's phone is not worse off, and the block it can
+ * land in is four times shorter.
+ */
+const MAX_PAIR_ATTEMPTS = 3;
+const PAIR_BLOCK_MS = 15 * 1000;
+
+/**
+ * Wrong guesses allowed against one code before that code is refused.
+ *
+ * A code is a six digit guess and the relay's answer to a wrong one is the same for
+ * every code, so the only way to make guessing expensive is to make it expensive per
+ * code. A code that has been guessed wrongly is worth nothing to the person who
+ * guessed it, so it is refused for the rest of the window: the guesses after the first
+ * cost the account nothing, and the account's own budget is only spent by codes that
+ * are being tried for the first time.
+ */
+const MAX_CODE_PAIR_ATTEMPTS = 1;
+const CODE_BLOCK_MS = 10 * 60 * 1000;
+
+/** How many codes the per-code budgets are kept for at once. */
+const MAX_CODE_ATTEMPT_ENTRIES = 512;
 
 export class RelaySession {
   private readonly codes = new Map<string, PairingCodeRecord>();
@@ -163,6 +191,14 @@ export class RelaySession {
   /** Wrong pairing guesses since the last success, and the block they trigger. */
   private failedPairAttempts = 0;
   private pairBlockedUntil = 0;
+  /**
+   * Wrong guesses charged to one code.
+   *
+   * A code that is guessed again and again is charged here and not to the account's
+   * budget, so a flood against a single code cannot lock the owner's phone out of
+   * its own pairing.
+   */
+  private readonly codeAttempts = new Map<string, { count: number; blockedUntil: number; expiresAt: number }>();
   /**
    * Bridge tokens issued at or before this instant are dead.
    *
@@ -435,6 +471,9 @@ export class RelaySession {
     const expiresAt = this.now() + PAIRING_CODE_TTL_MS;
     const record: PairingCodeRecord = { code, bridgeId, bridgeName, expiresAt };
     const previousOwner = this.bridgeId;
+    // A code the bridge issues is not a code that was guessed, so any refusal left
+    // over for it by an earlier guess is dropped.
+    this.codeAttempts.delete(code);
 
     // The desktop identifies itself here; from now on its token is the one that
     // manages this account's devices. The claim and the code are written down
@@ -469,6 +508,51 @@ export class RelaySession {
     return this.bridgeId;
   }
 
+  /**
+   * Charges a wrong guess to one code.
+   *
+   * A code that is guessed again and again is charged here and not to the account's
+   * budget, so a flood against one code cannot lock the owner's phone out of its own
+   * pairing. The code itself is refused for a long time once it has been guessed, so
+   * a sweep that keeps coming back to one code pays for every guess.
+   *
+   * @returns `blocked` when the code is refused, and `charged` when the guess is a
+   *   new one that the account's own budget has to pay for.
+   */
+  private chargeCodeAttempt(code: string): 'blocked' | 'charged' {
+    const now = this.now();
+    const entry = this.codeAttempts.get(code);
+    if (entry && entry.blockedUntil > now) return 'blocked';
+    // The first guess at a code is charged to the account, and the code is then
+    // refused for the rest of the window: the guesses after it cost the attacker
+    // requests and the account nothing.
+    const count = (entry && entry.expiresAt > now ? entry.count : 0) + 1;
+    this.codeAttempts.set(code, {
+      count,
+      blockedUntil: count >= MAX_CODE_PAIR_ATTEMPTS ? now + CODE_BLOCK_MS : 0,
+      expiresAt: now + CODE_BLOCK_MS,
+    });
+    this.pruneCodeAttempts();
+    return 'charged';
+  }
+
+  /**
+   * Keeps the per-code budgets from growing without bound.
+   *
+   * The key is a string a caller chose, so the map is bounded in age and in size.
+   */
+  private pruneCodeAttempts(): void {
+    const now = this.now();
+    for (const [code, entry] of this.codeAttempts) {
+      if (entry.expiresAt <= now) this.codeAttempts.delete(code);
+    }
+    while (this.codeAttempts.size > MAX_CODE_ATTEMPT_ENTRIES) {
+      const oldest = this.codeAttempts.keys().next();
+      if (oldest.done) break;
+      this.codeAttempts.delete(oldest.value);
+    }
+  }
+
   /** Exchanges a pairing code for a device token. */
   async pairDevice(
     code: string,
@@ -477,8 +561,13 @@ export class RelaySession {
     clientVersion: string,
   ): Promise<PairingResponse> {
     await this.ensureLoaded();
+
     // A wrong guess must not be free: the code space is only a million, and the
     // endpoint is unauthenticated by design (the code is the credential).
+    //
+    // The block is the relay's only brake on a sweep through the code space, so it
+    // comes first. The window is short, because this budget is shared with the
+    // owner's phone: a long block is a block on the real user.
     if (this.now() < this.pairBlockedUntil) {
       return {
         ok: false,
@@ -492,6 +581,17 @@ export class RelaySession {
     const record = this.codes.get(code);
     if (!record) {
       this.pruneExpiredCodes();
+      // A code that has already been guessed is charged to its own budget, so that a
+      // flood against one code cannot use up the account's budget and lock the owner's
+      // phone out of its own pairing.
+      const charge = this.chargeCodeAttempt(code);
+      if (charge === 'blocked') {
+        return {
+          ok: false,
+          code: 'RATE_LIMITED',
+          message: 'Too many wrong codes. Wait a moment and ask the desktop for a new one.',
+        };
+      }
       this.failedPairAttempts += 1;
       if (this.failedPairAttempts >= MAX_PAIR_ATTEMPTS) {
         this.failedPairAttempts = 0;
@@ -508,6 +608,7 @@ export class RelaySession {
     // Single use: the code is consumed the moment it is claimed.
     this.codes.delete(code);
     this.failedPairAttempts = 0;
+    this.codeAttempts.delete(code);
 
     const { token, expiresAt } = await issueToken(
       deviceId,

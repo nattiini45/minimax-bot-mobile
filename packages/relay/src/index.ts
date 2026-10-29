@@ -267,6 +267,13 @@ export default {
 
       return json({ error: 'not_found', message: 'Unknown route.' }, 404);
     } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        // The body was refused before it was read, so nothing of it was taken in.
+        return json(
+          { ok: false, code: 'BAD_REQUEST', message: 'The request body is too large.' },
+          413,
+        );
+      }
       return json(
         { error: 'internal', message: error instanceof Error ? error.message : 'unexpected error' },
         500,
@@ -283,13 +290,75 @@ function relayError(code: RelayErrorCode, message: string, status: number): Resp
   return json({ ok: false, code, message: message || describeRelayError(code) }, status);
 }
 
+/**
+ * The largest request body the relay reads.
+ *
+ * Every JSON body the relay accepts is a handful of short fields: a pairing code, a
+ * device id, a bridge id. A body that is larger than this is not a body the relay can
+ * use, and the bridge's own surface already caps its bodies at 256 KB.
+ */
+const MAX_JSON_BODY_BYTES = 16 * 1024;
+
+/** Thrown when a request body is larger than the relay reads. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('The request body is too large.');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Reads a body, refusing one that is too large.
+ *
+ * The declared length is checked first, so a body that says it is huge is refused
+ * without being read at all. The read itself is bounded as well, for a body that
+ * understates or omits its length.
+ */
+async function readBoundedText(request: Request, limit: number): Promise<string> {
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new BodyTooLargeError();
+  }
+
+  const body = request.body;
+  if (!body) return '';
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > limit) {
+        throw new BodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   try {
-    const text = await request.text();
+    const text = await readBoundedText(request, MAX_JSON_BODY_BYTES);
     if (!text) return {};
     const parsed = JSON.parse(text);
     return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) throw error;
     return {};
   }
 }
