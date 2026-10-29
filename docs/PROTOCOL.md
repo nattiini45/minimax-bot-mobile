@@ -182,6 +182,12 @@ The WebSocket authenticates through the query string because the browser WebSock
 API cannot set headers. The `role` is `bridge` or `device`; the `subject` is the
 bridge id or the device id.
 
+A bridge token also has to be bound to the account: the token carries the account
+it was minted for, and the relay refuses it against any other one. The account in
+the path and the account in the token have to be the same. Device tokens carry no
+account — the relay scopes a device by the device registry of the account's own
+room. See `PAIRING.md` for the token payload.
+
 ## Bridge loopback surface
 
 The bridge's own HTTP server is loopback-only and exists for the desktop surface.

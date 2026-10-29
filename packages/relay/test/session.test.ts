@@ -6,6 +6,19 @@ import { RelaySession, type SessionOptions, type SocketLike } from '../src/sessi
 
 const SECRET = 'test-secret-value';
 
+/** The account the room belongs to. */
+const ACCOUNT = 'acct-1';
+
+/**
+ * A bridge token bound to an account, the way the mint script issues one.
+ *
+ * A bridge token without an account is not a usable credential: the relay
+ * rejects it, because it would be valid against every account.
+ */
+async function bridgeToken(bridgeId = 'bridge-1', accountId = ACCOUNT) {
+  return issueToken(bridgeId, 'bridge', 60_000, SECRET, { accountId });
+}
+
 class FakeSocket implements SocketLike {
   readonly sent: string[] = [];
   closed: { code?: number; reason?: string } | null = null;
@@ -206,12 +219,12 @@ describe('socket registration', () => {
 
   it('replaces an older bridge socket when a new bridge connects', async () => {
     const session = makeSession();
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
     const first = new FakeSocket();
     const second = new FakeSocket();
 
-    await session.registerSocket({ id: 'p1', role: 'bridge', subject: 'bridge-1', token, socket: first });
-    await session.registerSocket({ id: 'p2', role: 'bridge', subject: 'bridge-1', token, socket: second });
+    await session.registerSocket({ id: 'p1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: first });
+    await session.registerSocket({ id: 'p2', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: second });
 
     expect(first.closed?.code).toBe(CLOSE_CODE.replaced);
     expect(session.status().bridgeOnline).toBe(true);
@@ -231,12 +244,13 @@ describe('frame routing', () => {
       socket: deviceSocket,
     });
 
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
     const bridgeSocket = new FakeSocket();
     await session.registerSocket({
       id: 'b1',
       role: 'bridge',
       subject: 'bridge-1',
+      accountId: ACCOUNT,
       token,
       socket: bridgeSocket,
     });
@@ -281,10 +295,10 @@ describe('frame routing', () => {
   it('replays missed events to a resuming device', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
 
     const bridgeSocket = new FakeSocket();
-    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
     session.handleFrame(peer, JSON.stringify({ v: 1, id: 'f1', ts: 1, type: 'evt.team_snapshot', source: 'bridge', payload: {} }));
@@ -309,10 +323,10 @@ describe('frame routing', () => {
   it('does not replay control frames to a device that never sent them', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
 
     const bridgeSocket = new FakeSocket();
-    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
     // The event comes FIRST on purpose. A control frame that arrives before any event
@@ -345,10 +359,10 @@ describe('frame routing', () => {
   it('still delivers a control frame to the devices that are connected', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
 
     const bridgeSocket = new FakeSocket();
-    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
     const deviceSocket = new FakeSocket();
@@ -369,10 +383,10 @@ describe('frame routing', () => {
   it('drops a frame it cannot read instead of passing it on', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
 
     const bridgeSocket = new FakeSocket();
-    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
     const deviceSocket = new FakeSocket();
@@ -395,10 +409,10 @@ describe('frame routing', () => {
   it('flags truncation when a resuming device fell behind the buffer', async () => {
     const session = makeSession({ ringCapacity: 4 });
     const paired = await pair(session, 'device-1');
-    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+    const { token } = await bridgeToken();
 
     const bridgeSocket = new FakeSocket();
-    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', token, socket: bridgeSocket });
+    await session.registerSocket({ id: 'b1', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: bridgeSocket });
     const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: bridgeSocket };
 
     for (let i = 0; i < 10; i += 1) {
@@ -439,5 +453,114 @@ describe('frame routing', () => {
 
     session.handleFrame(peer, '{not json');
     expect(deviceSocket.sent).toHaveLength(0);
+  });
+});
+
+describe('bridge ownership', () => {
+  it('refuses a bridge token that was minted for another account', async () => {
+    const session = makeSession();
+    const { token } = await bridgeToken('bridge-1', 'acct-other');
+    const socket = new FakeSocket();
+
+    const result = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token,
+      socket,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
+    expect(session.status().bridgeOnline).toBe(false);
+  });
+
+  it('accepts a bridge token that was minted for this account', async () => {
+    const session = makeSession();
+    const { token } = await bridgeToken();
+    const socket = new FakeSocket();
+
+    const result = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token,
+      socket,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(session.status().bridgeOnline).toBe(true);
+  });
+
+  it('refuses a foreign bridge on a room that already has an owner', async () => {
+    const session = makeSession();
+    session.createPairingCode('bridge-1', 'Desk');
+    const { token } = await bridgeToken('bridge-2');
+    const socket = new FakeSocket();
+
+    const result = await session.registerSocket({
+      id: 'b2',
+      role: 'bridge',
+      subject: 'bridge-2',
+      accountId: ACCOUNT,
+      token,
+      socket,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
+    expect(session.status().bridgeOnline).toBe(false);
+  });
+
+  it('lets the owner back into the room it owns', async () => {
+    const session = makeSession();
+    session.createPairingCode('bridge-1', 'Desk');
+    const { token } = await bridgeToken();
+    const socket = new FakeSocket();
+
+    const result = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token,
+      socket,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(session.status().bridgeOnline).toBe(true);
+  });
+
+  it('does not let a foreign bridge displace the owner', async () => {
+    const session = makeSession();
+    session.createPairingCode('bridge-1', 'Desk');
+    const { token: ownerToken } = await bridgeToken();
+    const owner = new FakeSocket();
+    await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token: ownerToken,
+      socket: owner,
+    });
+
+    const { token: foreignToken } = await bridgeToken('bridge-2');
+    const foreign = new FakeSocket();
+    const result = await session.registerSocket({
+      id: 'b2',
+      role: 'bridge',
+      subject: 'bridge-2',
+      accountId: ACCOUNT,
+      token: foreignToken,
+      socket: foreign,
+    });
+
+    expect(result.ok).toBe(false);
+    // The owner is still connected: the refusal happens before the eviction.
+    expect(owner.closed).toBeNull();
+    expect(session.status().bridgeOnline).toBe(true);
   });
 });

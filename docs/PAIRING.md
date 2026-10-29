@@ -80,12 +80,37 @@ Token payload:
 
 ```jsonc
 { "v": 1, "sub": "<deviceId | bridgeId>", "role": "device | bridge",
-  "exp": 1793181000000, "jti": "<unique id>" }
+  "exp": 1793181000000, "jti": "<unique id>",
+  "acc": "<accountId>" }   // bridge tokens only
 ```
 
 `verifyToken` returns `null` for anything malformed, wrongly signed, expired, or
 carrying an unknown role. Callers treat `null` as "not authorized" — never as a
 partial success.
+
+### The account a token is bound to
+
+A bridge token carries the account it was minted for, and the relay refuses it
+against any other account. That is what keeps the relay multi-tenant: a token
+from one desktop is a credential for *its* room and nothing else, so it cannot
+be pointed at another tenant's room to read their conversation or displace
+their bridge.
+
+The claim is required. A bridge token without it is not a token — `verifyToken`
+rejects it, and so the relay does. Two consequences worth knowing:
+
+- **A bridge token has to be re-minted after this change.** Older tokens have no
+  account in them and stop working. `RELAY_SECRET=… npm run mint:token -w
+  @minimax-bot/relay -- --bridge-id <id> --account <accountId>` produces a new
+  one; the account has to be the same one the desktop already uses.
+- **Keep the bridge id stable across re-mints.** An account has one owning
+  bridge, and once a room has been claimed, only that owner may attach. A token
+  minted for a *different* bridge id is refused on an account that already has
+  an owner.
+
+Device tokens do not carry the claim. The relay scopes a device by the device
+registry of the account's own room, so a device token never reaches an account
+it was not issued for, and a phone that paired earlier keeps working.
 
 ## Configuration
 
