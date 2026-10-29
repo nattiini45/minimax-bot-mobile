@@ -46,6 +46,14 @@ export async function start(context) {
     });
   });
 
+  // A rotated token is persisted the same way a configured one is, so the surface
+  // and the bridge never disagree about which token is live.
+  bridge.onToken = async (token) => {
+    await saveConfig(context.dataDir, { ...config, bridgeToken: token });
+    config = { ...config, bridgeToken: token };
+    bridge.config = config;
+  };
+
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(context.listen.port, context.listen.host, () => {
@@ -129,6 +137,20 @@ export async function handle(request, response, deps) {
       return json(response, 400, {
         error: 'PAIRING_UNAVAILABLE',
         message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (request.method === 'POST' && path === '/api/rotate-token') {
+    const { bridge } = deps;
+    try {
+      await bridge.rotateToken();
+      return json(response, 200, { ok: true });
+    } catch (error) {
+      return json(response, 502, {
+        error: 'rotation_failed',
+        message:
+          error instanceof Error ? error.message : 'The relay refused the token rotation.',
       });
     }
   }

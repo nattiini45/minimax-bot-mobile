@@ -286,4 +286,50 @@ export class RelayClient {
     );
     return response.ok;
   }
+
+  /**
+   * Asks the relay for a fresh token.
+   *
+   * The relay signs it — it holds the shared secret — and every older bridge token
+   * for this account stops working at the same moment. That is what makes a leaked
+   * token revocable: it is not enough to change the token, the old one has to die.
+   *
+   * @returns {Promise<string>} the new token
+   */
+  async rotateToken() {
+    if (!this.configured) throw new Error('the relay is not configured');
+    const base = this.httpUrl();
+    const response = await fetch(
+      `${base}/r/${encodeURIComponent(this.accountId)}/bridge/token`,
+      { method: 'POST', headers: { authorization: `Bearer ${this.token}` } },
+    );
+    if (!response.ok) {
+      throw new Error(`The relay refused the token rotation (${response.status}).`);
+    }
+    const body = /** @type {{token?: string}} */ (await response.json());
+    if (!body.token) throw new Error('The relay did not return a token.');
+    this.token = body.token;
+    return body.token;
+  }
+
+  /**
+   * When the current token expires, epoch ms — or null when that cannot be read.
+   *
+   * The token is signed, not encrypted: its payload is readable, so the bridge can
+   * tell that the token is about to run out without asking anyone.
+   *
+   * @returns {number | null}
+   */
+  tokenExpiresAt() {
+    if (!this.token) return null;
+    const [body] = this.token.split('.');
+    if (!body) return null;
+    try {
+      const padded = body.replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+      return typeof payload.exp === 'number' ? payload.exp : null;
+    } catch {
+      return null;
+    }
+  }
 }

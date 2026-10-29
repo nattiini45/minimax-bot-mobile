@@ -295,11 +295,20 @@ export class Bridge {
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     this.snapshotTimer = undefined;
     this.linkedAt = Date.now();
+    /**
+     * Called with a fresh token after a rotation, so the host can persist it.
+     *
+     * @type {((token: string) => Promise<void> | void) | null}
+     */
+    this.onToken = null;
   }
 
   async start() {
     await this.ledger.init();
     await this.tools.refresh();
+    // A token that is about to run out is replaced before it does, so a short
+    // lifetime does not quietly take the desktop offline.
+    await this.rotateTokenIfExpiring();
     this.relay.start();
     this.logger.info('bridge started', {
       bridgeId: this.config?.bridgeId,
@@ -807,6 +816,48 @@ export class Bridge {
       diagnostics: this.diagnostics(),
       tools: this.tools.catalog,
     };
+  }
+
+  /**
+   * Asks the relay for a fresh token and keeps it.
+   *
+   * The relay signs the new token and kills every older one, so a token that
+   * leaked stops working the moment it is replaced.
+   *
+   * @returns {Promise<string>} the new token
+   */
+  async rotateToken() {
+    const token = await this.relay.rotateToken();
+    this.config = { ...this.config, bridgeToken: token };
+    if (this.onToken) await this.onToken(token);
+    this.logger.info('the bridge token was rotated');
+    return token;
+  }
+
+  /**
+   * Replaces the token before it runs out.
+   *
+   * The bridge cannot mint for itself — only the operator holding the relay
+   * secret can — so a token that quietly expired would take the desktop offline
+   * until it was re-minted by hand. It rotates itself while the current one is
+   * still good enough to ask for a replacement.
+   *
+   * @param {number} [withinMs] how close to the expiry counts as "about to run out"
+   * @returns {Promise<boolean>} whether it rotated
+   */
+  async rotateTokenIfExpiring(withinMs = 6 * 60 * 60 * 1000) {
+    const expiresAt = this.relay.tokenExpiresAt();
+    if (expiresAt === null) return false;
+    if (expiresAt - Date.now() > withinMs) return false;
+    try {
+      await this.rotateToken();
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `the bridge token could not be rotated: ${error instanceof Error ? error.message : error}`,
+      );
+      return false;
+    }
   }
 }
 

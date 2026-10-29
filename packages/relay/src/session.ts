@@ -56,7 +56,32 @@ export interface SessionOptions {
   ringCapacity?: number;
   deviceTokenTtlMs?: number;
   now?: () => number;
+  /**
+   * Durable storage, when the host has one.
+   *
+   * The revocation cutoff lives here so that a revoked bridge token stays
+   * revoked across a restart. Without it, redeploying the relay would hand a
+   * killed credential back.
+   */
+  storage?: SessionStorage;
 }
+
+/**
+ * The part of a Durable Object's storage the session needs.
+ *
+ * It is the shape of `ctx.storage`, kept to two calls so the session stays
+ * testable without a Cloudflare runtime.
+ */
+export interface SessionStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+}
+
+/** How long a bridge token the relay issues stays valid. */
+export const BRIDGE_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Where the revocation cutoff is kept. */
+const BRIDGE_TOKEN_CUTOFF_KEY = 'bridge-token-cutoff';
 
 export interface PairingCodeResult {
   code: string;
@@ -91,18 +116,103 @@ export class RelaySession {
   /** Wrong pairing guesses since the last success, and the block they trigger. */
   private failedPairAttempts = 0;
   private pairBlockedUntil = 0;
+  /**
+   * Bridge tokens issued at or before this instant are dead.
+   *
+   * A revocation names a moment rather than a token: rotating the bridge token
+   * kills every token issued before it, including one that was minted and never
+   * used. `null` means nothing has been revoked yet.
+   */
+  private revokedBridgeTokensBefore: number | null = null;
+  private cutoffLoaded = false;
   private readonly ring: SeqRing;
   private seq = 0;
 
   private readonly secret: string;
   private readonly deviceTokenTtlMs: number;
   private readonly now: () => number;
+  private readonly storage: SessionStorage | undefined;
 
   constructor(options: SessionOptions) {
     this.secret = options.secret;
     this.ring = new SeqRing(options.ringCapacity ?? DEFAULT_RING_CAPACITY);
     this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEVICE_TOKEN_TTL_MS;
     this.now = options.now ?? (() => Date.now());
+    this.storage = options.storage;
+  }
+
+  // -- bridge token lifecycle ------------------------------------------------
+
+  /**
+   * The instant before which every bridge token is dead, or `null`.
+   *
+   * @returns {Promise<number | null>}
+   */
+  async bridgeTokenCutoff(): Promise<number | null> {
+    if (!this.cutoffLoaded) {
+      this.cutoffLoaded = true;
+      const stored = await this.storage?.get<number>(BRIDGE_TOKEN_CUTOFF_KEY);
+      if (typeof stored === 'number') {
+        this.revokedBridgeTokensBefore = stored;
+      }
+    }
+    return this.revokedBridgeTokensBefore;
+  }
+
+  /**
+   * Kills every bridge token issued at or before `instant`.
+   *
+   * @param {number} instant epoch ms
+   */
+  async revokeBridgeTokensBefore(instant: number): Promise<void> {
+    this.cutoffLoaded = true;
+    this.revokedBridgeTokensBefore = instant;
+    await this.storage?.put(BRIDGE_TOKEN_CUTOFF_KEY, instant);
+  }
+
+  /**
+   * Whether a bridge token has been revoked.
+   *
+   * A token that carries no issue time counts as issued at the beginning of
+   * time, so it dies with the first revocation.
+   *
+   * @param {TokenPayload | null} payload
+   * @returns {Promise<boolean>}
+   */
+  async isBridgeTokenRevoked(payload: TokenPayload | null): Promise<boolean> {
+    const cutoff = await this.bridgeTokenCutoff();
+    if (cutoff === null) return false;
+    if (!payload) return true;
+    return (payload.iat ?? 0) <= cutoff;
+  }
+
+  /**
+   * Issues a fresh bridge token and kills every older one.
+   *
+   * @param {string} bridgeId the bridge the token belongs to
+   * @param {string} accountId the account the token is bound to
+   */
+  async rotateBridgeToken(
+    bridgeId: string,
+    accountId: string,
+  ): Promise<{ token: string; expiresAt: number }> {
+    const now = this.now();
+    // The new token is issued a millisecond after the cutoff, so the revocation
+    // cannot catch the token that caused it. Two tokens minted in the same
+    // millisecond would otherwise be indistinguishable by time, and the old one
+    // would survive the rotation that was meant to kill it.
+    const issuedAt = now + 1;
+    const { token, expiresAt } = await issueToken(
+      bridgeId,
+      'bridge',
+      BRIDGE_TOKEN_TTL_MS,
+      this.secret,
+      { accountId, now: issuedAt },
+    );
+    // Everything issued at or before `now` is dead, including the token this
+    // rotation replaces.
+    await this.revokeBridgeTokensBefore(now);
+    return { token, expiresAt };
   }
 
   // -- pairing -------------------------------------------------------------
@@ -283,6 +393,11 @@ export class RelaySession {
     // read the conversation. A device never gets here — it is already scoped by
     // the device registry above.
     if (payload.acc !== params.accountId) {
+      return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
+    }
+    // A revoked bridge token is dead even though it is signed and unexpired: the
+    // whole point of a revocation is to cut a credential that still looks fine.
+    if (await this.isBridgeTokenRevoked(payload)) {
       return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
     }
     // An account has one owner. Once the owner is known, only that owner may

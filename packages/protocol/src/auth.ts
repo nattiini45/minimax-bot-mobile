@@ -32,6 +32,14 @@ export interface TokenPayload {
    * never reaches an account it was not issued for.
    */
   acc?: string;
+  /**
+   * When the token was issued, epoch ms.
+   *
+   * This is what makes a revocation a moment rather than a list: the relay can
+   * say "every bridge token issued before now is dead" without having to have
+   * seen the tokens it is killing.
+   */
+  iat?: number;
 }
 
 const encoder = new TextEncoder();
@@ -153,6 +161,7 @@ export async function issueToken(
     role,
     exp: expiresAt,
     jti: newTokenId(now),
+    iat: now,
   };
   if (options.accountId) {
     payload.acc = options.accountId;
