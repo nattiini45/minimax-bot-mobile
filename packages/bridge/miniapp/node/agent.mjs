@@ -186,34 +186,65 @@ export class AgentRunner {
     if (decision !== 'allowOnce' && decision !== 'deny') {
       throw codedError('INVALID_ARGUMENTS', 'A decision must be either allowOnce or deny.', false);
     }
-    const item = this.pending?.get(requestId);
-    if (!item || item.kind !== 'permission') {
+    // The request is claimed before the Host is called. Two answers to the same
+    // request must not both reach the Host: the second one finds nothing to answer
+    // and is refused.
+    const item = this.pending?.claim(requestId, 'permission');
+    if (!item) {
       throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
-    await this.context.agent.reply({
-      sessionId: item.sessionId,
-      requestId,
-      decision,
-    });
-    this.pending.resolve(requestId);
-    this.onEvent('evt.permission_resolved', { requestId, decision });
+    // Answering is Host work like a turn is, so it is counted like one.
+    if (this.activeRuns >= MAX_CONCURRENT_RUNS) {
+      this.pending?.release(requestId);
+      throw codedError('BUSY', 'Too many turns are already running.', true);
+    }
+    this.activeRuns += 1;
+    try {
+      await this.context.agent.reply({
+        sessionId: item.sessionId,
+        requestId,
+        decision,
+      });
+      this.pending.resolve(requestId);
+      this.onEvent('evt.permission_resolved', { requestId, decision });
+    } catch (error) {
+      // The Host did not take the answer, so the request is still waiting for one and
+      // the phone is allowed to give it again.
+      this.pending?.release(requestId);
+      throw error;
+    } finally {
+      this.activeRuns -= 1;
+    }
   }
 
   /** Answers a pending questionnaire and observes the continuation turn. */
   async answer(requestId, answers) {
-    const item = this.pending?.get(requestId);
-    if (!item || item.kind !== 'question') {
+    // Claimed before the Host is called, for the same reason as a permission decision.
+    const item = this.pending?.claim(requestId, 'question');
+    if (!item) {
       throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
+    if (this.activeRuns >= MAX_CONCURRENT_RUNS) {
+      this.pending?.release(requestId);
+      throw codedError('BUSY', 'Too many turns are already running.', true);
+    }
+    this.activeRuns += 1;
     const chatId = this.chatIdForSession(item.sessionId);
     const controller = new AbortController();
-    const result = await this.context.agent.answer(
-      { sessionId: item.sessionId, requestId, answers },
-      { signal: controller.signal, onEvent: (event) => this.handleAgentEvent(chatId, event, controller) },
-    );
-    this.pending.resolve(requestId);
-    this.onEvent('evt.question_answered', { requestId });
-    return result;
+    try {
+      const result = await this.context.agent.answer(
+        { sessionId: item.sessionId, requestId, answers },
+        { signal: controller.signal, onEvent: (event) => this.handleAgentEvent(chatId, event, controller) },
+      );
+      this.pending.resolve(requestId);
+      this.onEvent('evt.question_answered', { requestId });
+      return result;
+    } catch (error) {
+      this.pending?.release(requestId);
+      throw error;
+    } finally {
+      this.activeRuns -= 1;
+    }
   }
 
   /** Aborts a running turn. */
