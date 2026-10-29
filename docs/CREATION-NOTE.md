@@ -103,7 +103,8 @@ The relay is a deployed Cloudflare Worker, not a script on my laptop:
 
 - **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io>
 - **Relay:** <https://minimax-bot-relay.nattiini45.workers.dev>
-- **Demo video:** <https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4>
+- **Demo video:** <https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4>
+- **Android APK:** <https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk>
 
 A published build names its relay through `EXPO_PUBLIC_RELAY_URL`, which Expo inlines at build
 time, so the link above opens a client that already knows where to go — a stranger types the
