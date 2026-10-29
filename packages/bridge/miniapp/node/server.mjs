@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 
 import { Bridge } from './bridge.mjs';
+import { checkCaller } from './caller.mjs';
 import { isAllowedRelayUrl, loadConfig, relayOrigin, saveConfig } from './config.mjs';
 
 const MAX_BODY = 256 * 1024;
@@ -23,10 +24,19 @@ export async function start(context) {
   /**
    * The secret that proves a mutating request came from the desktop surface.
    *
-   * It is handed out by `GET /api/session`, which a cross-site caller can call but
-   * not read, and it is regenerated every time the bridge starts.
+   * It is handed out by `GET /api/session`, which only answers a caller whose own
+   * headers say it is the surface, and it is regenerated every time the bridge
+   * starts.
    */
   const secret = randomBytes(32).toString('hex');
+
+  /**
+   * The address the Host assigned to this bridge.
+   *
+   * The desktop surface is served from this address, so it is also the only origin
+   * a legitimate request can come from.
+   */
+  const surface = { host: context.listen.host, port: context.listen.port };
 
   /**
    * Writes the configuration and hands it to the live bridge.
@@ -51,6 +61,7 @@ export async function start(context) {
       bridge,
       context,
       secret,
+      surface,
       getConfig: () => bridge.config,
       setConfig,
     }).catch((error) => {
@@ -100,9 +111,17 @@ export async function handle(request, response, deps) {
   const url = new URL(request.url, 'http://127.0.0.1');
   const path = url.pathname;
 
+  // The surface binds loopback, so every process on the machine — and every page
+  // in the user's browser — can reach the port. The caller's own headers say
+  // whether this is the desktop surface, and a request that fails to say so is
+  // not answered at all: not with the account details, and not with the secret.
+  const caller = checkCaller(request, deps.surface);
+  if (caller.ok === false) {
+    return json(response, 403, { error: 'forbidden', message: caller.message });
+  }
+
   // Everything that can change state is restricted to the desktop surface.
   //
-  // The bridge binds loopback, so a page in the user's browser can still reach it.
   // `POST /api/config` in particular can point the bridge at another relay, which
   // would hand that relay the bridge token and every frame that follows — so a
   // request from a page the user did not open must never be honoured.
@@ -115,12 +134,18 @@ export async function handle(request, response, deps) {
   }
 
   if (request.method === 'GET' && path === '/api/session') {
-    // Same-origin only: the bridge sends no CORS headers, so a cross-site caller can
-    // request this but cannot read the answer.
+    // The secret is the last thing that goes wrong: a page that cannot be shown to
+    // be the surface never gets this far, and the surface is the only thing that
+    // can read the answer.
     return json(response, 200, { secret: deps.secret });
   }
 
   if (request.method === 'GET' && path === '/api/status') {
+    // The account id and the relay address are what an attacker aims with, so they
+    // are not handed to a caller that has not shown it holds the surface secret.
+    if (!hasSecret(request, deps)) {
+      return json(response, 403, { error: 'forbidden', message: 'This request did not come from the bridge surface.' });
+    }
     const { bridge, getConfig } = deps;
     const config = getConfig();
     return json(response, 200, {
@@ -163,6 +188,9 @@ export async function handle(request, response, deps) {
   }
 
   if (request.method === 'GET' && path === '/api/devices') {
+    if (!hasSecret(request, deps)) {
+      return json(response, 403, { error: 'forbidden', message: 'This request did not come from the bridge surface.' });
+    }
     const { bridge } = deps;
     return json(response, 200, { devices: await bridge.relay.listDevices() });
   }
@@ -180,6 +208,9 @@ export async function handle(request, response, deps) {
   }
 
   if (request.method === 'GET' && path === '/api/snapshot') {
+    if (!hasSecret(request, deps)) {
+      return json(response, 403, { error: 'forbidden', message: 'This request did not come from the bridge surface.' });
+    }
     const { bridge } = deps;
     const team = await bridge.readTeam();
     return json(response, 200, {
@@ -257,6 +288,18 @@ export async function handle(request, response, deps) {
 }
 
 /**
+ * Whether the caller holds the bridge's per-process secret.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ * @param {any} deps
+ * @returns {boolean}
+ */
+function hasSecret(request, deps) {
+  const presented = request.headers['x-bridge-secret'];
+  return typeof presented === 'string' && presented === deps.secret;
+}
+
+/**
  * Whether a mutating request came from the bridge's own desktop surface.
  *
  * The bridge binds loopback, so a page in the user's browser can still reach it —
@@ -268,17 +311,14 @@ export async function handle(request, response, deps) {
  *   so a cross-site request from a page the user opened always triggers a preflight,
  *   and the bridge answers no preflight — the browser blocks the request outright.
  * - The request must carry the per-process secret. The secret is handed out by
- *   `GET /api/session`, which a cross-site caller can *call* but cannot *read*
- *   (the bridge sends no CORS headers), so a hostile page can never obtain it.
+ *   `GET /api/session`, which only answers a caller whose own headers show it is
+ *   the surface, so a hostile page can never obtain it.
  */
 function isTrustedRequest(request, deps) {
   const contentType = request.headers['content-type'] ?? '';
   if (!contentType.toLowerCase().startsWith('application/json')) return false;
 
-  const presented = request.headers['x-bridge-secret'];
-  if (typeof presented !== 'string' || presented !== deps.secret) return false;
-
-  return true;
+  return hasSecret(request, deps);
 }
 
 function json(response, status, value) {
@@ -287,6 +327,10 @@ function json(response, status, value) {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'content-length': Buffer.byteLength(body),
+    // The surface answers JSON and nothing else, so the browser has no reason to
+    // guess, and it has no reason to run anything either.
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
   });
   response.end(body);
 }

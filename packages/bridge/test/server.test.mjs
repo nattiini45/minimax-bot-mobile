@@ -5,11 +5,18 @@ import { handle } from '../miniapp/node/server.mjs';
 
 const SECRET = 'the-per-process-secret';
 
+/** The address the Host assigned to the bridge in these tests. */
+const HOST = '127.0.0.1:53378';
+const SURFACE = { host: '127.0.0.1', port: 53378 };
+
 /**
  * A request the surface can read.
  *
  * `readJson` walks the request as an async iterable of chunks, so the fake has to
  * be one. It is typed as `any` because it stands in for a socket request.
+ *
+ * The `Host` header is the address the request was sent to, and the bridge only
+ * answers a request that names it — a browser always sends it.
  *
  * @returns {any}
  */
@@ -18,7 +25,7 @@ function fakeRequest(method, path, { headers = {}, body = null } = {}) {
   return {
     method,
     url: `http://127.0.0.1${path}`,
-    headers,
+    headers: { host: HOST, ...headers },
     async *[Symbol.asyncIterator]() {
       for (const chunk of chunks) yield chunk;
     },
@@ -62,9 +69,12 @@ function makeDeps(overrides = {}) {
       relay: { configured: true, connected: true, listDevices: async () => [] },
       diagnostics: () => ({}),
       pending: { list: () => [] },
+      readTeam: async () => ({ members: [] }),
+      tools: { catalog: [] },
     },
     context: {},
     secret: SECRET,
+    surface: SURFACE,
     getConfig: () => state.config,
     setConfig: async (next) => {
       state.config = next;
@@ -160,4 +170,72 @@ test('a request without the surface secret cannot change the configuration', asy
   );
 
   assert.equal(response.status, 403);
+});
+
+test('a request that names another host is refused before anything else', async () => {
+  // DNS rebinding: the page was loaded from its own name, which now resolves to
+  // the loopback address. The browser sends that name, and the bridge is not it.
+  const response = fakeResponse();
+  await handle(
+    fakeRequest('GET', '/api/session', { headers: { host: 'evil.example:53378' } }),
+    response,
+    makeDeps(),
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.includes(SECRET), false);
+});
+
+test('a request from another origin is refused before anything else', async () => {
+  const response = fakeResponse();
+  await handle(
+    fakeRequest('GET', '/api/session', { headers: { origin: 'https://evil.example' } }),
+    response,
+    makeDeps(),
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.includes(SECRET), false);
+});
+
+test('the account details are not handed to a caller without the secret', async () => {
+  // The account id and the relay address are what an attacker aims with.
+  for (const path of ['/api/status', '/api/devices', '/api/snapshot']) {
+    const response = fakeResponse();
+    await handle(fakeRequest('GET', path), response, makeDeps());
+    assert.equal(response.status, 403, `expected ${path} to need the secret`);
+    assert.equal(response.body.includes('default'), false);
+    assert.equal(response.body.includes('relay.example.workers.dev'), false);
+  }
+});
+
+test('the account details are handed to the surface', async () => {
+  const response = fakeResponse();
+  await handle(
+    fakeRequest('GET', '/api/status', { headers: { 'x-bridge-secret': SECRET } }),
+    response,
+    makeDeps(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.includes('default'), true);
+});
+
+test('the device list is handed to the surface', async () => {
+  const response = fakeResponse();
+  await handle(
+    fakeRequest('GET', '/api/devices', { headers: { 'x-bridge-secret': SECRET } }),
+    response,
+    makeDeps(),
+  );
+
+  assert.equal(response.status, 200);
+});
+
+test('the secret is only handed to a caller that names the bridge', async () => {
+  const response = fakeResponse();
+  await handle(fakeRequest('GET', '/api/session'), response, makeDeps());
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.includes(SECRET), true);
 });
