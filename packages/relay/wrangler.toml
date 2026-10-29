@@ -15,6 +15,11 @@ new_sqlite_classes = ["Relay"]
 
 [observability]
 enabled = true
+# The WebSocket upgrade carries the peer credential in the query string, and a
+# Fetch invocation log records the whole request URL. Without this, every
+# bridge and device token is written to the log store — persisted, at full
+# sampling — where it outlives the token it came from.
+redact_query_string = true
 
 # RELAY_SECRET is the shared HMAC key used to sign device and bridge tokens.
 # Set it with `wrangler secret put RELAY_SECRET` (never commit it).
