@@ -10,6 +10,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import { newId } from '@minimax-bot/protocol';
 
+import { accountIdFromPath } from './account-path.js';
 import { RelaySession, type PeerSocket, type SocketLike } from './session.js';
 
 export interface RelayEnv {
@@ -79,6 +80,13 @@ export class Relay extends DurableObject<RelayEnv> {
       return new Response('not found', { status: 404 });
     }
 
+    // The room this socket is joining. The Worker routes /r/:accountId/ws to the
+    // object for that account, and the path is the only place the account is
+    // named — the object itself is addressed by an id, not by a name. It is
+    // parsed with the same helper the Worker uses, because the two sides compare
+    // the account in the path against the account the token was minted for.
+    const accountId = accountIdFromPath(url.pathname);
+
     const role = url.searchParams.get('role');
     const subject = url.searchParams.get('subject') ?? '';
     const token = url.searchParams.get('token') ?? '';
@@ -110,6 +118,7 @@ export class Relay extends DurableObject<RelayEnv> {
       socket: peer.socket,
       name,
       lastSeq: Number.isFinite(lastSeq) ? lastSeq : undefined,
+      accountId,
     });
 
     if (!registered.ok) {

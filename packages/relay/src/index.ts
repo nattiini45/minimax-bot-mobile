@@ -8,6 +8,7 @@
 
 import { describeRelayError, verifyToken, type RelayErrorCode } from '@minimax-bot/protocol';
 
+import { accountIdFromPath } from './account-path.js';
 import { Relay, type RelayEnv } from './relay.js';
 
 // The Durable Object must be exported from the entrypoint so Wrangler can bind it.
@@ -47,7 +48,7 @@ export default {
     if (segments[0] !== 'r' || !segments[1]) {
       return json({ error: 'bad_request', message: 'Expected /r/:accountId/...' }, 400);
     }
-    const accountId = segments[1];
+    const accountId = accountIdFromPath(url.pathname);
     const rest = segments.slice(2);
     const stub = env.RELAY.getByName(accountId);
 
@@ -55,6 +56,26 @@ export default {
       if (rest[0] === 'ws') {
         // The WebSocket upgrade must carry its own auth in the query string, because the
         // browser WebSocket API cannot set headers.
+        //
+        // The token is checked here as well as in the Durable Object. This is the cheap
+        // check: it refuses a bridge token that was minted for another account before
+        // the request ever reaches the room that holds the conversation. The Durable
+        // Object repeats it, and that is the one that counts — the Worker is a front
+        // door, the object owns the room.
+        //
+        // A device token carries no account claim. The relay scopes a device by the
+        // device registry of the account's own object, and that check lives there.
+        const requestedRole = url.searchParams.get('role');
+        const payload = await verifyToken(url.searchParams.get('token') ?? '', env.RELAY_SECRET);
+        if (!payload || payload.role !== requestedRole) {
+          return json({ error: 'unauthorized', message: 'The token is not valid.' }, 401);
+        }
+        if (payload.role === 'bridge' && payload.acc !== accountId) {
+          return json(
+            { error: 'unauthorized', message: 'The bridge token is not valid for this account.' },
+            401,
+          );
+        }
         const upgraded = await stub.fetch(request);
         return upgraded;
       }

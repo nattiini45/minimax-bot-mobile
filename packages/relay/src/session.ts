@@ -173,7 +173,7 @@ export class RelaySession {
       'device',
       this.deviceTokenTtlMs,
       this.secret,
-      this.now(),
+      { now: this.now() },
     );
 
     // A revoked device stays revoked. Re-pairing the same id must not silently
@@ -239,6 +239,8 @@ export class RelaySession {
     socket: SocketLike;
     name?: string;
     lastSeq?: number;
+    /** The account this room is. A bridge token has to be bound to it. */
+    accountId?: string;
   }): Promise<
     | { ok: true; replay: { entries: { seq: number; data: string }[]; truncated: boolean } }
     | { ok: false; code: number; reason: string }
@@ -271,6 +273,24 @@ export class RelaySession {
       this.deviceSockets.set(params.subject, peer);
       const replay = this.ring.since(params.lastSeq ?? 0);
       return { ok: true, replay };
+    }
+
+    // The bridge has to belong to this room.
+    //
+    // A bridge token carries the account it was minted for. Without this check a
+    // token would be a credential for every account on the relay: any tenant
+    // could attach to any other tenant's room, displace the real bridge and
+    // read the conversation. A device never gets here — it is already scoped by
+    // the device registry above.
+    if (payload.acc !== params.accountId) {
+      return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
+    }
+    // An account has one owner. Once the owner is known, only that owner may
+    // attach — this is what stops a foreign bridge from evicting it. An
+    // unclaimed room still accepts a correctly bound token, because the desktop
+    // connects before it has asked for its first pairing code.
+    if (this.bridgeId !== null && this.bridgeId !== payload.sub) {
+      return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
     }
 
     // Bridge: only one at a time; a new bridge replaces the old one.

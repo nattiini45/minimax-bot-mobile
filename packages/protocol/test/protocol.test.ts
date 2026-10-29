@@ -12,7 +12,60 @@ import {
   isOpType,
   isValidClientMessageId,
   isValidPairingCode,
+  issueToken,
+  verifyToken,
 } from '../src/index.js';
+
+const SECRET = 'protocol-test-secret';
+
+describe('token account binding', () => {
+  it('carries the account on a bridge token', async () => {
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET, {
+      accountId: 'acct-1',
+    });
+
+    const payload = await verifyToken(token, SECRET);
+
+    expect(payload?.acc).toBe('acct-1');
+    expect(payload?.sub).toBe('bridge-1');
+    expect(payload?.role).toBe('bridge');
+  });
+
+  it('rejects a bridge token that is not bound to an account', async () => {
+    // Without the claim the token would be a credential for every account on
+    // the relay, so it is not a token at all.
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET);
+
+    expect(await verifyToken(token, SECRET)).toBeNull();
+  });
+
+  it('accepts a device token without an account claim', async () => {
+    // A device is scoped by the relay's own per-account device registry, so it
+    // does not need the claim — and a phone that paired before the change keeps
+    // working.
+    const { token } = await issueToken('device-1', 'device', 60_000, SECRET);
+
+    const payload = await verifyToken(token, SECRET);
+
+    expect(payload?.role).toBe('device');
+    expect(payload?.acc).toBeUndefined();
+  });
+
+  it('rejects a bridge token whose account claim was removed', async () => {
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET, {
+      accountId: 'acct-1',
+    });
+    const [body, signature] = token.split('.');
+    const stripped = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete stripped.acc;
+    const forged = `${Buffer.from(JSON.stringify(stripped)).toString('base64url')}.${signature}`;
+
+    expect(await verifyToken(forged, SECRET)).toBeNull();
+  });
+});
 
 describe('opcode catalogue', () => {
   it('exposes every operation the plan requires', () => {

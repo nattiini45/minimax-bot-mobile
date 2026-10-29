@@ -23,6 +23,15 @@ export interface TokenPayload {
   exp: number;
   /** Unique token id. */
   jti: string;
+  /**
+   * The account this token is bound to.
+   *
+   * Required for bridge tokens: without it a bridge credential would be valid
+   * against every account on the relay. Device tokens omit it — the relay
+   * scopes a device by its own per-account device registry, so a device token
+   * never reaches an account it was not issued for.
+   */
+  acc?: string;
 }
 
 const encoder = new TextEncoder();
@@ -106,8 +115,26 @@ export async function verifyToken(token: string, secret: string): Promise<TokenP
   if (typeof payload.sub !== 'string' || !payload.sub) return null;
   if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null;
   if (payload.exp <= Date.now()) return null;
+  // A bridge token has to name the account it belongs to. An unbound bridge
+  // token would be a credential for every room on the relay, so one without
+  // the claim is not a token at all.
+  if (payload.role === 'bridge' && (typeof payload.acc !== 'string' || !payload.acc)) {
+    return null;
+  }
 
   return payload;
+}
+
+export interface IssueTokenOptions {
+  /** Clock override, for tests. */
+  now?: number;
+  /**
+   * Binds the token to an account.
+   *
+   * Required for bridge tokens: `verifyToken` rejects a bridge token that
+   * does not carry it. Device tokens do not need it.
+   */
+  accountId?: string;
 }
 
 /** Builds and signs a token in one step. */
@@ -116,8 +143,9 @@ export async function issueToken(
   role: PeerRole,
   ttlMs: number,
   secret: string,
-  now: number = Date.now(),
+  options: IssueTokenOptions = {},
 ): Promise<{ token: string; expiresAt: number }> {
+  const now = options.now ?? Date.now();
   const expiresAt = now + ttlMs;
   const payload: TokenPayload = {
     v: 1,
@@ -126,6 +154,9 @@ export async function issueToken(
     exp: expiresAt,
     jti: newTokenId(now),
   };
+  if (options.accountId) {
+    payload.acc = options.accountId;
+  }
   return { token: await signToken(payload, secret), expiresAt };
 }
 

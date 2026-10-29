@@ -8,18 +8,35 @@
  * cannot even ask the relay for a pairing code.
  *
  * Usage:
- *   node scripts/mint-bridge-token.mjs --secret <RELAY_SECRET> --bridge-id <id> [--account default] [--days 30]
+ *   node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--days 30]
+ *
+ * The relay secret is read from the environment (RELAY_SECRET) or from the file
+ * named by --secret-file. Passing it with --secret still works, but a command-line
+ * argument lands in the shell history and in the process table, so it is the last
+ * resort rather than the first.
+ *
+ * The account is the room the token can reach. It is baked into the signed token,
+ * so the relay refuses the token against any other account.
  *
  * It prints the bridge configuration to paste into the bridge, and the token on its
  * own line so it can be piped.
  */
+
+import { readFileSync } from 'node:fs';
 
 import { issueToken } from '@minimax-bot/protocol';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function parseArgs(argv) {
-  const options = { secret: '', bridgeId: '', bridgeName: 'Desktop', accountId: 'default', days: 30 };
+  const options = {
+    secret: '',
+    secretFile: '',
+    bridgeId: '',
+    bridgeName: 'Desktop',
+    accountId: 'default',
+    days: 30,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const value = argv[i + 1];
@@ -30,6 +47,9 @@ function parseArgs(argv) {
     switch (key) {
       case '--secret':
         options.secret = value;
+        break;
+      case '--secret-file':
+        options.secretFile = value;
         break;
       case '--bridge-id':
         options.bridgeId = value;
@@ -50,6 +70,30 @@ function parseArgs(argv) {
   return options;
 }
 
+/**
+ * Reads the relay secret once, from the first source that has it.
+ *
+ * The secret is not echoed anywhere: only the bridge token is printed, and that
+ * one is meant to be copied into the desktop.
+ */
+function readSecret(options) {
+  if (options.secretFile) {
+    try {
+      const fromFile = readFileSync(options.secretFile, 'utf8').trim();
+      if (fromFile) return fromFile;
+    } catch (error) {
+      throw new Error(`Could not read the secret file: ${error.message}`);
+    }
+  }
+  const fromEnv = process.env.RELAY_SECRET;
+  if (fromEnv) {
+    // Read once: a child process should not inherit the master secret.
+    delete process.env.RELAY_SECRET;
+    return fromEnv;
+  }
+  return options.secret;
+}
+
 async function main() {
   let options;
   try {
@@ -57,17 +101,23 @@ async function main() {
   } catch (error) {
     console.error(error.message);
     console.error(
-      'Usage: node scripts/mint-bridge-token.mjs --secret <RELAY_SECRET> --bridge-id <id> [--account default] [--days 30]',
+      'Usage: node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--days 30]',
     );
+    console.error('The secret comes from RELAY_SECRET, or from --secret-file <path>.');
     process.exit(2);
   }
 
-  if (!options.secret) {
-    console.error('The relay secret is required: --secret <RELAY_SECRET>.');
+  const secret = readSecret(options);
+  if (!secret) {
+    console.error('The relay secret is required: set RELAY_SECRET, or pass --secret-file <path>.');
     process.exit(2);
   }
   if (!options.bridgeId) {
     console.error('The bridge id is required: --bridge-id <id>.');
+    process.exit(2);
+  }
+  if (!options.accountId) {
+    console.error('The account id is required: --account <accountId>.');
     process.exit(2);
   }
   if (!Number.isFinite(options.days) || options.days <= 0) {
@@ -76,7 +126,9 @@ async function main() {
   }
 
   const ttlMs = Math.round(options.days * DAY_MS);
-  const { token, expiresAt } = await issueToken(options.bridgeId, 'bridge', ttlMs, options.secret);
+  const { token, expiresAt } = await issueToken(options.bridgeId, 'bridge', ttlMs, secret, {
+    accountId: options.accountId,
+  });
 
   const config = {
     relayUrl: process.env.RELAY_URL ?? 'http://127.0.0.1:8787',
@@ -85,7 +137,9 @@ async function main() {
     bridgeToken: token,
   };
 
-  console.log(`# bridge token for ${options.bridgeId}, valid until ${new Date(expiresAt).toISOString()}`);
+  console.log(
+    `# bridge token for ${options.bridgeId} on account ${options.accountId}, valid until ${new Date(expiresAt).toISOString()}`,
+  );
   console.log(token);
   console.log('');
   console.log('# bridge configuration');
