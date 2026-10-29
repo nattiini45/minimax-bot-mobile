@@ -234,3 +234,79 @@ describe('a phone that is ahead of the relay', () => {
     expect(registered.replay.truncated).toBe(true);
   });
 });
+
+describe('the durable state when it misbehaves', () => {
+  it('reads the revocation cutoff once, so a concurrent caller cannot miss it', async () => {
+    const storage = makeStorage();
+    const before = session(storage);
+    await before.revokeBridgeTokensBefore(Date.now() + 1_000);
+
+    // A new session over the same storage is a relay that was redeployed.
+    const after = session(storage);
+
+    // Two callers arrive together, the way two requests to one Durable Object
+    // do. The second one must not be told that no token has been revoked while
+    // the first read is still in flight: that is how a revoked bridge token
+    // walks back into the room.
+    const [first, second] = await Promise.all([
+      after.bridgeTokenCutoff(),
+      after.bridgeTokenCutoff(),
+    ]);
+
+    expect(first).not.toBeNull();
+    expect(second).toBe(first);
+  });
+
+  it('tries again after a failed read', async () => {
+    let reads = 0;
+    let broken = true;
+    const data = new Map<string, unknown>();
+    const storage = {
+      async get<T>(key: string): Promise<T | undefined> {
+        reads += 1;
+        if (broken) throw new Error('the storage is not reachable');
+        return data.get(key) as T | undefined;
+      },
+      async put<T>(key: string, value: T): Promise<void> {
+        data.set(key, value);
+      },
+    };
+    const target = session(storage);
+
+    // The read fails, so the caller is told the state could not be read rather
+    // than being given an empty room that looks like the truth.
+    await expect(target.bridgeTokenCutoff()).rejects.toThrow('the storage is not reachable');
+
+    // The room is not bricked by that: the next caller reads again.
+    broken = false;
+    const readsBefore = reads;
+    await expect(target.bridgeTokenCutoff()).resolves.toBeNull();
+    expect(reads).toBeGreaterThan(readsBefore);
+  });
+
+  it('writes the counter again after a failed write', async () => {
+    const data = new Map<string, unknown>();
+    let broken = true;
+    const storage = {
+      async get<T>(key: string): Promise<T | undefined> {
+        return data.get(key) as T | undefined;
+      },
+      async put<T>(key: string, value: T): Promise<void> {
+        if (broken && key === 'seq') throw new Error('the storage is not reachable');
+        data.set(key, value);
+      },
+    };
+    const target = session(storage);
+
+    await emitEvent(target, 'f1');
+    await target.flush();
+
+    // The write failed, so the counter is not on disk yet.
+    expect(data.get('seq')).toBeUndefined();
+
+    // The next flush tries again, and the counter lands.
+    broken = false;
+    await target.flush();
+    expect(data.get('seq')).toBe(1);
+  });
+});

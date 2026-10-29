@@ -160,7 +160,6 @@ export class RelaySession {
    * used. `null` means nothing has been revoked yet.
    */
   private revokedBridgeTokensBefore: number | null = null;
-  private cutoffLoaded = false;
   private readonly ring: SeqRing;
   private seq = 0;
 
@@ -204,7 +203,13 @@ export class RelaySession {
    */
   private ensureLoaded(): Promise<void> {
     if (!this.loading) {
-      this.loading = this.load();
+      this.loading = this.load().catch((error: unknown) => {
+        // A failed read must not leave the room unusable for good: the next
+        // caller tries again. The failure is passed on, so a request that needs
+        // the durable state gets an error rather than an empty room.
+        this.loading = null;
+        throw error;
+      });
     }
     return this.loading;
   }
@@ -212,11 +217,12 @@ export class RelaySession {
   private async load(): Promise<void> {
     const storage = this.storage;
     if (!storage) return;
-    const [devices, codes, owner, seq] = await Promise.all([
+    const [devices, codes, owner, seq, cutoff] = await Promise.all([
       storage.get<DeviceRecord[]>(DEVICES_KEY),
       storage.get<PairingCodeRecord[]>(PAIRING_CODES_KEY),
       storage.get<string>(OWNER_BRIDGE_KEY),
       storage.get<number>(SEQ_KEY),
+      storage.get<number>(BRIDGE_TOKEN_CUTOFF_KEY),
     ]);
     if (Array.isArray(devices)) {
       for (const device of devices) {
@@ -236,6 +242,12 @@ export class RelaySession {
     }
     if (typeof owner === 'string' && owner) this.bridgeId = owner;
     if (typeof seq === 'number' && Number.isFinite(seq) && seq > this.seq) this.seq = seq;
+    // The cutoff is only applied when nothing in memory has revoked a token yet.
+    // A revocation that happened while this read was in flight is newer than
+    // whatever was on disk when the read started, and it must not be undone by it.
+    if (this.revokedBridgeTokensBefore === null && typeof cutoff === 'number') {
+      this.revokedBridgeTokensBefore = cutoff;
+    }
   }
 
   /** Writes the device registry down. */
@@ -267,19 +279,24 @@ export class RelaySession {
   private persistSeq(): void {
     this.seqDirty = true;
     this.seqWrite = this.seqWrite.then(
-      () => this.flushSeq(),
-      () => this.flushSeq(),
+      () => this.writeSeq(),
+      () => this.writeSeq(),
     );
   }
 
-  private async flushSeq(): Promise<void> {
+  /** Writes the counter down, if it has moved since the last write. */
+  private async writeSeq(): Promise<void> {
     if (!this.seqDirty) return;
     this.seqDirty = false;
     const value = this.seq;
     try {
       await this.storage?.put(SEQ_KEY, value);
     } catch {
-      /* the next frame tries again */
+      // The write failed, so the counter on disk is older than the one in
+      // memory. The next frame, or the next flush, tries again. Until it lands, a
+      // phone whose cursor is above the stored counter is told to resynchronise
+      // rather than being left with a silent hole.
+      this.seqDirty = true;
     }
   }
 
@@ -291,6 +308,9 @@ export class RelaySession {
    */
   async flush(): Promise<void> {
     await this.seqWrite;
+    // A frame that arrived while the write was in flight, or a write that
+    // failed, is picked up here.
+    if (this.seqDirty) await this.writeSeq();
   }
 
   // -- bridge token lifecycle ------------------------------------------------
@@ -298,16 +318,16 @@ export class RelaySession {
   /**
    * The instant before which every bridge token is dead, or `null`.
    *
+   * The cutoff is part of the durable state of the room, so it is read with the
+   * rest of it. It used to have a load of its own, guarded by a flag that was
+   * set before the read had finished - which meant a second caller could arrive
+   * while the first was still reading, see the flag, and be told no token had
+   * been revoked. One load, one answer.
+   *
    * @returns {Promise<number | null>}
    */
   async bridgeTokenCutoff(): Promise<number | null> {
-    if (!this.cutoffLoaded) {
-      this.cutoffLoaded = true;
-      const stored = await this.storage?.get<number>(BRIDGE_TOKEN_CUTOFF_KEY);
-      if (typeof stored === 'number') {
-        this.revokedBridgeTokensBefore = stored;
-      }
-    }
+    await this.ensureLoaded();
     return this.revokedBridgeTokensBefore;
   }
 
@@ -317,7 +337,9 @@ export class RelaySession {
    * @param {number} instant epoch ms
    */
   async revokeBridgeTokensBefore(instant: number): Promise<void> {
-    this.cutoffLoaded = true;
+    // The load comes first, so that the cutoff it reads cannot overwrite the
+    // revocation that is about to be written.
+    await this.ensureLoaded();
     this.revokedBridgeTokensBefore = instant;
     await this.storage?.put(BRIDGE_TOKEN_CUTOFF_KEY, instant);
   }
