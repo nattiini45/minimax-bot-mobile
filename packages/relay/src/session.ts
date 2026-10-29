@@ -21,9 +21,11 @@ import {
   CLOSE_CODE,
   DEVICE_TOKEN_TTL_MS,
   PAIRING_CODE_TTL_MS,
+  decodeFrame,
   generatePairingCode,
   issueToken,
   verifyToken,
+  type Frame,
   type PairingResponse,
   type PeerRole,
   type TokenPayload,
@@ -805,6 +807,23 @@ export class RelaySession {
    * monotonic `seq`, buffered, and fanned out to every connected device.
    */
   handleFrame(from: PeerSocket, raw: string): void {
+    // Every frame a peer sends is checked against the shared contract before the
+    // relay acts on it. The relay does not interpret payloads, but it does rely
+    // on the envelope: it routes by type, it owns the order, and the bridge
+    // identifies an operation by its id. A frame that does not satisfy the
+    // contract is not a frame, and it is dropped rather than passed on.
+    let frame: Frame;
+    try {
+      frame = decodeFrame(raw);
+    } catch {
+      return;
+    }
+    // The sequence belongs to the relay. A peer that sets one is saying where
+    // its frame belongs in the order, and that is not the peer's to say: the
+    // phone takes the relay's number as the order, so a peer-set number would
+    // move the phone's cursor past every frame that follows.
+    if (frame.seq !== undefined) return;
+
     if (from.role === 'device') {
       // A device that was revoked while its socket was open must stop being able to
       // drive the desktop.
@@ -813,8 +832,7 @@ export class RelaySession {
       this.sendToBridge(raw);
       return;
     }
-    const prepared = this.prepare(raw);
-    if (!prepared) return;
+    const prepared = this.prepare(raw, frame);
     if (!prepared.buffered) {
       // Control frames answer exactly one request. Buffering them would replay the
       // answers to requests a resuming device never made — a stale `ack` looks like a
@@ -872,31 +890,16 @@ export class RelaySession {
    * resume from where it left off. Control frames are conversation-scoped and are
    * never buffered.
    *
-   * A frame the relay cannot read is dropped. A frame with no type, or a type that is
-   * not a string, would make the client throw when it reads `frame.type`, so passing it
-   * on would break the device that received it.
+   * The frame has already been checked against the shared contract by the
+   * caller, so the envelope can be relied on here.
    */
-  private prepare(raw: string): { data: string; buffered: boolean } | null {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const frame = parsed as Record<string, unknown>;
-    if (typeof frame.type !== 'string') return null;
+  private prepare(raw: string, frame: Frame): { data: string; buffered: boolean } {
     if (!frame.type.startsWith('evt.')) {
       // A control frame is forwarded exactly as it arrived: it is not sequenced, and
       // the relay does not touch a number it does not own.
       return { data: raw, buffered: false };
     }
     this.seq += 1;
-    if ('seq' in frame) {
-      // The bridge should not set `seq`; if it does, the relay's number wins.
-      frame.seq = this.seq;
-      return { data: JSON.stringify(frame), buffered: true };
-    }
     // The sequence number is injected into the original text rather than
     // re-serialising the parsed object: re-serialising would round 64-bit integers,
     // and the relay's job is to route frames, not to interpret them.
