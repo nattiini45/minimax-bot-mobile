@@ -134,6 +134,14 @@ export interface AppState {
   flushOutbox: () => void;
   /** Re-reads everything the phone can show: the roster, tasks, helpers and schedules. */
   refreshTeam: () => void;
+  /**
+   * How many times the phone has had to rebuild its view of the conversation.
+   *
+   * A screen that shows a conversation watches this: the projection is dropped
+   * when the phone learns it has a hole, so the screen has to read the thread
+   * again rather than show an empty one until it is opened afresh.
+   */
+  resyncCount: number;
 }
 
 export interface AppBot {
@@ -475,6 +483,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   status: 'idle',
   lastError: null,
   bridgeOnline: false,
+  /**
+   * How many times the phone has had to rebuild its view of the conversation.
+   *
+   * A screen that shows a conversation watches this: the projection is dropped
+   * when the phone learns it has a hole, so the screen has to read the thread
+   * again rather than show an empty one until it is opened afresh.
+   */
+  resyncCount: 0,
 
   bots: [],
   groups: [],
@@ -734,7 +750,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // The relay could not replay everything this phone missed, so its view has a
         // hole. The projection is dropped and rebuilt from a fresh read — including
         // the live trace, which would otherwise keep claiming that the team is working.
-        set({
+        set((state) => ({
           messages: {},
           tasks: [],
           helpers: [],
@@ -744,7 +760,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           activity: {},
           activeTurn: {},
           reactions: {},
-        });
+          // The thread is read again by the screen that shows it: the projection
+          // it was reading is the one that was just dropped, so without this the
+          // open conversation would be empty until the screen was opened afresh.
+          resyncCount: state.resyncCount + 1,
+        }));
       }
       get().refreshTeam();
       return;

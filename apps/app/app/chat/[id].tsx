@@ -48,6 +48,11 @@ export default function ChatScreen() {
   const requestAsync = useAppStore((state) => state.requestAsync);
   const sendChatMessage = useAppStore((state) => state.sendChatMessage);
   const react = useAppStore((state) => state.react);
+  // The phone rebuilds its view of the conversation when it learns it has a hole.
+  // The thread is read again then, because the copy on screen is the one that
+  // was dropped: without this the conversation would be empty until the screen
+  // was opened afresh.
+  const resyncCount = useAppStore((state) => state.resyncCount);
 
   const [draft, setDraft] = useState('');
   const [reactingTo, setReactingTo] = useState<string | null>(null);
@@ -73,7 +78,7 @@ export default function ChatScreen() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, resyncCount]);
 
   useEffect(() => {
     if (thread.length > lastCount.current) {
