@@ -88,6 +88,13 @@ export class RelayClient {
     this.socket = null;
     this.closed = false;
     this.attempt = 0;
+    /**
+     * Whether a ticket was refused and the token was used instead.
+     *
+     * A relay whose room predates the ticket does not know what one is, so the
+     * connection is tried once more with the token.
+     */
+    this.usedTokenFallback = false;
     this.queue = [];
     this.timer = null;
   }
@@ -196,7 +203,16 @@ export class RelayClient {
   async open(WebSocketImpl) {
     const ticket = await this.fetchTicket();
     if (this.closed) return;
+    this.openSocket(WebSocketImpl, ticket);
+  }
 
+  /**
+   * Opens the socket, with a ticket for the connection when there is one.
+   *
+   * @param {typeof WebSocket} WebSocketImpl
+   * @param {string | null} ticket
+   */
+  openSocket(WebSocketImpl, ticket) {
     let socket;
     try {
       socket = new WebSocketImpl(this.endpoint(ticket));
@@ -207,8 +223,10 @@ export class RelayClient {
     }
 
     this.socket = socket;
+    let opened = false;
 
     socket.addEventListener('open', () => {
+      opened = true;
       this.attempt = 0;
       this.onStatus(true);
       this.flush();
@@ -226,7 +244,17 @@ export class RelayClient {
     socket.addEventListener('close', () => {
       this.socket = null;
       this.onStatus(false);
-      if (!this.closed) this.scheduleReconnect();
+      if (this.closed) return;
+      // A connection that was refused before it opened, and that carried a
+      // ticket, is tried once more with the token: a relay whose room predates
+      // the ticket does not know what one is.
+      if (!opened && ticket && !this.usedTokenFallback) {
+        this.usedTokenFallback = true;
+        this.logger.info('the relay refused the ticket; trying the token');
+        this.openSocket(WebSocketImpl, null);
+        return;
+      }
+      this.scheduleReconnect();
     });
 
     socket.addEventListener('error', () => {
