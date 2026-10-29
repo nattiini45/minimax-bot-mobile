@@ -110,15 +110,44 @@ export class RelayClient {
     return translate(this.url ?? '', TO_WS);
   }
 
-  endpoint() {
+  endpoint(ticket) {
     const base = this.wsUrl();
     const params = new URLSearchParams({
       role: 'bridge',
       subject: this.bridgeId,
-      token: this.token,
       name: this.name,
     });
+    // A ticket stands in for the token for one connection. Without one the token
+    // rides in the URL, which is the part of a request that proxies and log
+    // pipelines keep.
+    if (ticket) params.set('ticket', ticket);
+    else params.set('token', this.token);
     return `${base}/r/${encodeURIComponent(this.accountId)}/ws?${params.toString()}`;
+  }
+
+  /**
+   * Asks the relay for a ticket for the next connection.
+   *
+   * The request carries the token in a header, which is the one place a
+   * credential can be kept out of a URL. A relay that does not offer tickets
+   * leaves the token where it was.
+   *
+   * @returns {Promise<string | null>}
+   */
+  async fetchTicket() {
+    if (!this.configured) return null;
+    const base = this.httpUrl();
+    try {
+      const response = await fetch(`${base}/r/${encodeURIComponent(this.accountId)}/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.token}` },
+      });
+      if (!response.ok) return null;
+      const body = /** @type {{ticket?: string}} */ (await response.json());
+      return typeof body?.ticket === 'string' ? body.ticket : null;
+    } catch {
+      return null;
+    }
   }
 
   start() {
@@ -154,10 +183,23 @@ export class RelayClient {
       this.logger.error('this runtime has no WebSocket client');
       return;
     }
+    // The socket is opened with a ticket when the relay offers one, so the
+    // long-lived token does not travel in the URL.
+    void this.open(WebSocketImpl);
+  }
+
+  /**
+   * Opens the socket, with a ticket for the connection when there is one.
+   *
+   * @param {typeof WebSocket} WebSocketImpl
+   */
+  async open(WebSocketImpl) {
+    const ticket = await this.fetchTicket();
+    if (this.closed) return;
 
     let socket;
     try {
-      socket = new WebSocketImpl(this.endpoint());
+      socket = new WebSocketImpl(this.endpoint(ticket));
     } catch (error) {
       this.logger.error(`relay connection failed: ${error instanceof Error ? error.message : error}`);
       this.scheduleReconnect();

@@ -56,7 +56,10 @@ HMAC-SHA-256 over the shared secret, with a 30 day expiry.
 
 ### 4. The phone connects
 
-The phone opens `GET /r/:accountId/ws?role=device&subject=<deviceId>&token=…&lastSeq=…`.
+The phone opens `GET /r/:accountId/ws?role=device&subject=<deviceId>&ticket=…&lastSeq=…`.
+The `ticket` is what travels in the URL, not the device token: the phone asks
+the relay for one over an ordinary request - which can carry a header - and the
+ticket is good for one connection and for half a minute.
 The relay verifies the token, checks that the device record exists, is not revoked,
 and still matches the presented token, then replays the frames the device missed.
 

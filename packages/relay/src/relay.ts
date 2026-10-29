@@ -8,7 +8,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 
-import { newId, type TokenPayload } from '@minimax-bot/protocol';
+import { newId, type PeerRole, type TokenPayload } from '@minimax-bot/protocol';
 
 import { accountIdFromPath } from './account-path.js';
 import { RelaySession, type PeerSocket, type SocketLike } from './session.js';
@@ -91,6 +91,16 @@ export class Relay extends DurableObject<RelayEnv> {
   }
 
   /**
+   * Mints a ticket for a single connection.
+   *
+   * The ticket stands for the credential the caller presented, for half a minute
+   * and for one connection only.
+   */
+  issueTicket(subject: string, role: PeerRole, credential: string, accountId: string) {
+    return this.session.issueTicket(subject, role, credential, accountId);
+  }
+
+  /**
    * A device releases its own token.
    *
    * The token has to be the one this account's registry issued to that device.
@@ -129,7 +139,9 @@ export class Relay extends DurableObject<RelayEnv> {
 
     const role = url.searchParams.get('role');
     const subject = url.searchParams.get('subject') ?? '';
-    const token = url.searchParams.get('token') ?? '';
+    // The credential is a ticket when the peer asked for one, and the
+    // long-lived token otherwise.
+    const token = url.searchParams.get('ticket') ?? url.searchParams.get('token') ?? '';
     const name = url.searchParams.get('name') ?? undefined;
     const lastSeqRaw = url.searchParams.get('lastSeq');
     const lastSeq = lastSeqRaw ? Number.parseInt(lastSeqRaw, 10) : undefined;

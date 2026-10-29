@@ -9,7 +9,7 @@
 
 import { CLOSE_CODE, createFrame, type Frame } from '@minimax-bot/protocol';
 
-import { relayWsUrl } from './relay-url';
+import { relayHttpUrl, relayWsUrl } from './relay-url';
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
@@ -70,16 +70,42 @@ export class RelayClient {
     return this.lastSeq;
   }
 
-  endpoint(): string {
+  endpoint(ticket?: string | null): string {
     const base = relayWsUrl(this.options.url);
     const params = new URLSearchParams({
       role: 'device',
       subject: this.options.deviceId,
-      token: this.options.token,
       name: 'Phone',
       lastSeq: String(this.lastSeq),
     });
+    // A ticket stands in for the token for one connection. Without one the token
+    // rides in the URL, which is the part of a request that proxies and log
+    // pipelines keep.
+    if (ticket) params.set('ticket', ticket);
+    else params.set('token', this.options.token);
     return `${base}/r/${encodeURIComponent(this.options.accountId)}/ws?${params.toString()}`;
+  }
+
+  /**
+   * Asks the relay for a ticket for the next connection.
+   *
+   * The request carries the token in a header, which is the one place a
+   * credential can be kept out of a URL. A relay that does not offer tickets
+   * leaves the token where it was.
+   */
+  private async fetchTicket(): Promise<string | null> {
+    const base = relayHttpUrl(this.options.url);
+    try {
+      const response = await fetch(`${base}/r/${encodeURIComponent(this.options.accountId)}/ws-ticket`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.options.token}` },
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as { ticket?: string };
+      return typeof body.ticket === 'string' ? body.ticket : null;
+    } catch {
+      return null;
+    }
   }
 
   connect(): void {
@@ -87,8 +113,16 @@ export class RelayClient {
     this.setStatus('connecting');
     this.opened = false;
     this.refused = false;
+    // The socket is opened with a ticket when the relay offers one, so the
+    // long-lived token does not travel in the URL.
+    void this.open();
+  }
 
-    const socket = new WebSocket(this.endpoint());
+  private async open(): Promise<void> {
+    const ticket = await this.fetchTicket();
+    if (this.closed) return;
+
+    const socket = new WebSocket(this.endpoint(ticket));
     this.socket = socket;
 
     socket.onopen = () => {

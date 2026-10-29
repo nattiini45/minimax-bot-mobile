@@ -177,10 +177,20 @@ prefixed `/r/:accountId`.
 | `/r/:accountId/status` | GET | — | `{ bridgeOnline, deviceCount, activeDevices, lastSeq }` |
 | `/r/:accountId/devices` | GET | — | List paired devices |
 | `/r/:accountId/devices/:deviceId` | DELETE | — | Revoke a device |
+| `/r/:accountId/devices/me` | DELETE | device token | A device releases its own token |
+| `/r/:accountId/ws-ticket` | POST | bridge or device token | A ticket for the next connection |
 
 The WebSocket authenticates through the query string because the browser WebSocket
 API cannot set headers. The `role` is `bridge` or `device`; the `subject` is the
 bridge id or the device id.
+
+What is in the query string is a **ticket**, not the peer's credential. A peer
+first asks the relay for one over an ordinary request - which can carry a
+header - and the ticket is what travels in the URL. A ticket is good for one
+connection and for half a minute, and the room refuses the second attempt with
+the same one. A URL that is kept somewhere - a log, a proxy - is therefore worth
+nothing a minute later. The long-lived token is still accepted in the query
+string, for a client that cannot ask for a ticket.
 
 A bridge token also has to be bound to the account: the token carries the account
 it was minted for, and the relay refuses it against any other one. The account in

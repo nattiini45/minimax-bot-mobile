@@ -731,3 +731,115 @@ describe('bridge ownership', () => {
     expect(session.status().bridgeOnline).toBe(true);
   });
 });
+
+describe('a ticket for a single connection', () => {
+  it('lets a device in without the token in the URL', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const token = paired.deviceToken!;
+
+    const ticket = await session.issueTicket('device-1', 'device', token, ACCOUNT);
+    expect(ticket).toBeTruthy();
+
+    const registered = await session.registerSocket({
+      id: 'peer-1',
+      role: 'device',
+      subject: 'device-1',
+      token: ticket!.ticket,
+      socket: new FakeSocket(),
+    });
+
+    expect(registered.ok).toBe(true);
+  });
+
+  it('is good for one connection only', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const ticket = await session.issueTicket('device-1', 'device', paired.deviceToken!, ACCOUNT);
+
+    const first = await session.registerSocket({
+      id: 'peer-1',
+      role: 'device',
+      subject: 'device-1',
+      token: ticket!.ticket,
+      socket: new FakeSocket(),
+    });
+    const second = await session.registerSocket({
+      id: 'peer-2',
+      role: 'device',
+      subject: 'device-1',
+      token: ticket!.ticket,
+      socket: new FakeSocket(),
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+  });
+
+  it('runs out', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const ticket = await session.issueTicket('device-1', 'device', paired.deviceToken!, ACCOUNT);
+
+    // A ticket is good for half a minute, not for the life of the token.
+    expect(ticket!.expiresAt - Date.now()).toBeLessThanOrEqual(30_000);
+  });
+
+  it('is not issued for a credential the room does not know', async () => {
+    const session = makeSession();
+
+    expect(await session.issueTicket('device-1', 'device', 'a-token', ACCOUNT)).toBeNull();
+  });
+
+  it('is not issued for a token that belongs to another device', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+
+    expect(await session.issueTicket('device-2', 'device', paired.deviceToken!, ACCOUNT)).toBeNull();
+  });
+
+  it('does not let a device in that has been revoked', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const ticket = await session.issueTicket('device-1', 'device', paired.deviceToken!, ACCOUNT);
+    session.revokeDevice('device-1');
+
+    const registered = await session.registerSocket({
+      id: 'peer-1',
+      role: 'device',
+      subject: 'device-1',
+      token: ticket!.ticket,
+      socket: new FakeSocket(),
+    });
+
+    expect(registered.ok).toBe(false);
+  });
+
+  it('lets the bridge in', async () => {
+    const session = makeSession();
+    const { code } = session.createPairingCode('bridge-1', 'Desk');
+    await session.pairDevice(code, 'device-1', 'Phone', '1.0.0');
+    const { token } = await bridgeToken();
+
+    const ticket = await session.issueTicket('bridge-1', 'bridge', token, ACCOUNT);
+    expect(ticket).toBeTruthy();
+
+    const registered = await session.registerSocket({
+      id: 'peer-b',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token: ticket!.ticket,
+      socket: new FakeSocket(),
+    });
+
+    expect(registered.ok).toBe(true);
+  });
+
+  it('is not issued for a bridge token of another account', async () => {
+    const session = makeSession();
+    const { token } = await bridgeToken('bridge-1', 'another-account');
+
+    expect(await session.issueTicket('bridge-1', 'bridge', token, ACCOUNT)).toBeNull();
+  });
+});

@@ -20,6 +20,14 @@ import {
 
 import { SeqRing } from './ring.js';
 
+/**
+ * How long a ticket for a single connection is good for.
+ *
+ * It has to be long enough for the handshake and short enough that a URL which
+ * was kept somewhere is worthless by the time anybody reads it.
+ */
+const TICKET_TTL_MS = 30_000;
+
 export interface SocketLike {
   send(data: string): void;
   close(code?: number, reason?: string): void;
@@ -130,6 +138,14 @@ export class RelaySession {
 
   private readonly secret: string;
   private readonly deviceTokenTtlMs: number;
+
+  /**
+   * The tickets that have been used, with the moment they run out.
+   *
+   * A ticket is good for one connection, so the second attempt with the same
+   * one has to be refused.
+   */
+  private readonly usedTickets = new Map<string, number>();
   private readonly now: () => number;
   private readonly storage: SessionStorage | undefined;
 
@@ -343,6 +359,46 @@ export class RelaySession {
     return this.revokeDevice(deviceId);
   }
 
+  /**
+   * Mints a ticket for a single connection.
+   *
+   * The WebSocket upgrade has to carry the peer's credential, and the browser
+   * WebSocket API cannot set a header - so the credential travels in the URL,
+   * which is the part of a request that proxies and log pipelines keep. A ticket
+   * is what travels instead: it stands for the credential, but only for half a
+   * minute and only once, so a URL that is kept somewhere is worth nothing a
+   * minute later.
+   *
+   * @param subject The bridge id or the device id the ticket stands for.
+   * @param role Which of the two the ticket is for.
+   * @param credential The long-lived credential the caller presented.
+   * @param accountId The account the room belongs to.
+   * @returns The ticket, or null when the credential is not one this room accepts.
+   */
+  async issueTicket(
+    subject: string,
+    role: PeerRole,
+    credential: string,
+    accountId: string,
+  ): Promise<{ ticket: string; expiresAt: number } | null> {
+    this.pruneTickets();
+    if (role === 'device') {
+      const device = this.devices.get(subject);
+      if (!device || device.revoked || device.token !== credential) return null;
+    } else {
+      const payload = await verifyToken(credential, this.secret);
+      if (!payload || payload.role !== 'bridge' || payload.acc !== accountId) return null;
+      if (await this.isBridgeTokenRevoked(payload)) return null;
+      if (this.bridgeId !== null && this.bridgeId !== payload.sub) return null;
+    }
+
+    const { token, expiresAt } = await issueToken(subject, role, TICKET_TTL_MS, this.secret, {
+      accountId: role === 'bridge' ? accountId : undefined,
+      ticket: true,
+    });
+    return { ticket: token, expiresAt };
+  }
+
   listDevices(): DeviceRecord[] {
     return [...this.devices.values()].map((device) => ({ ...device }));
   }
@@ -376,17 +432,31 @@ export class RelaySession {
       return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
     }
 
+    // A ticket is good for one connection. The second attempt with the same one
+    // is refused, so a URL that was kept somewhere cannot be used again.
+    const isTicket = payload.tick === true;
+    if (isTicket && this.usedTickets.has(payload.jti)) {
+      return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
+    }
+
     if (params.role === 'device') {
       const device = this.devices.get(params.subject);
-      if (!device || device.revoked || device.token !== params.token) {
+      // A ticket stands for the device it was minted for, so the registry decides
+      // whether the device may still come in. A long-lived token has to be the
+      // token the registry issued to that device.
+      const allowed = isTicket
+        ? Boolean(device && !device.revoked)
+        : Boolean(device && !device.revoked && device.token === params.token);
+      if (!allowed) {
         return { ok: false, code: CLOSE_CODE.deviceRevoked, reason: 'DEVICE_REVOKED' };
       }
+      if (isTicket) this.usedTickets.set(payload.jti, payload.exp);
       const peer: PeerSocket = {
         id: params.id,
         role: 'device',
         subject: params.subject,
         socket: params.socket,
-        name: device.deviceName,
+        name: device?.deviceName,
       };
       const previous = this.deviceSockets.get(params.subject);
       if (previous && previous.id !== peer.id) {
@@ -439,7 +509,21 @@ export class RelaySession {
       socket: params.socket,
       name: params.name,
     };
+    if (isTicket) this.usedTickets.set(payload.jti, payload.exp);
     return { ok: true, replay: { entries: [], truncated: false } };
+  }
+
+  /**
+   * Forgets the tickets that have run out.
+   *
+   * They are kept only so a ticket cannot be used twice, and a ticket that has
+   * run out cannot be used at all.
+   */
+  private pruneTickets(): void {
+    const now = this.now();
+    for (const [jti, expiresAt] of this.usedTickets) {
+      if (expiresAt <= now) this.usedTickets.delete(jti);
+    }
   }
 
   unregisterSocket(id: string): void {

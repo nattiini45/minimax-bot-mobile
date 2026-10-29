@@ -40,6 +40,15 @@ export interface TokenPayload {
    * seen the tokens it is killing.
    */
   iat?: number;
+  /**
+   * Whether this token is a ticket for a single connection.
+   *
+   * A ticket is what a client puts in the WebSocket URL instead of the
+   * credential it holds: it is good for half a minute and for one connection
+   * only, so a URL that is kept somewhere - a log, a proxy - is worth nothing a
+   * minute later.
+   */
+  tick?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -143,6 +152,14 @@ export interface IssueTokenOptions {
    * does not carry it. Device tokens do not need it.
    */
   accountId?: string;
+  /**
+   * Marks the token as a ticket for a single connection.
+   *
+   * A ticket is minted by the relay for a peer that has already shown its
+   * credential, and it stands in for that credential in a place that keeps
+   * what it is given - the WebSocket URL.
+   */
+  ticket?: boolean;
 }
 
 /** Builds and signs a token in one step. */
@@ -165,6 +182,9 @@ export async function issueToken(
   };
   if (options.accountId) {
     payload.acc = options.accountId;
+  }
+  if (options.ticket) {
+    payload.tick = true;
   }
   return { token: await signToken(payload, secret), expiresAt };
 }
