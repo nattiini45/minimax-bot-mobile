@@ -96,12 +96,21 @@ export interface SessionOptions {
 /**
  * The part of a Durable Object's storage the session needs.
  *
- * It is the shape of `ctx.storage`, kept to two calls so the session stays
- * testable without a Cloudflare runtime.
+ * It is the shape of `ctx.storage`, kept small so the session stays testable
+ * without a Cloudflare runtime.
  */
 export interface SessionStorage {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+  /**
+   * Writes several keys in one transaction.
+   *
+   * The Durable Object's storage applies a multi-key write atomically, which is
+   * what lets the room's state be written as one thing: a phone is registered by
+   * consuming a pairing code, and a room where the code was consumed but the
+   * device was not registered has lost a pairing for nothing.
+   */
+  put(entries: Record<string, unknown>): Promise<void>;
 }
 
 /** How long a bridge token the relay issues stays valid. */
@@ -255,16 +264,29 @@ export class RelaySession {
     await this.storage?.put(DEVICES_KEY, [...this.devices.values()]);
   }
 
+  /**
+   * Writes the room's durable state down, in one transaction.
+   *
+   * The registry, the codes and the owner are written together, because they
+   * change together: a phone is registered by consuming a code, and the owner
+   * is claimed when a code is issued. A room where the code was consumed but the
+   * device was not registered has lost a pairing for nothing, and a room that
+   * believes it has an owner while nothing on disk says so can be claimed by
+   * another desktop after a restart.
+   */
+  private async persistRoom(): Promise<void> {
+    const entries: Record<string, unknown> = {
+      [DEVICES_KEY]: [...this.devices.values()],
+      [PAIRING_CODES_KEY]: [...this.codes.values()],
+    };
+    if (this.bridgeId !== null) entries[OWNER_BRIDGE_KEY] = this.bridgeId;
+    await this.storage?.put(entries);
+  }
+
   /** Writes the outstanding pairing codes down, without the ones that ran out. */
   private async persistCodes(): Promise<void> {
     this.pruneExpiredCodes();
     await this.storage?.put(PAIRING_CODES_KEY, [...this.codes.values()]);
-  }
-
-  /** Writes the account's owner down. */
-  private async persistOwner(): Promise<void> {
-    if (this.bridgeId === null) return;
-    await this.storage?.put(OWNER_BRIDGE_KEY, this.bridgeId);
   }
 
   /**
@@ -334,12 +356,13 @@ export class RelaySession {
   /**
    * Kills every bridge token issued at or before `instant`.
    *
+   * The kill switch does not wait for the durable state to be read. A storage
+   * that cannot be read is exactly when the kill switch is wanted, and the room
+   * acts on the revocation in memory from here on.
+   *
    * @param {number} instant epoch ms
    */
   async revokeBridgeTokensBefore(instant: number): Promise<void> {
-    // The load comes first, so that the cutoff it reads cannot overwrite the
-    // revocation that is about to be written.
-    await this.ensureLoaded();
     this.revokedBridgeTokensBefore = instant;
     await this.storage?.put(BRIDGE_TOKEN_CUTOFF_KEY, instant);
   }
@@ -408,12 +431,23 @@ export class RelaySession {
     }
     const code = generatePairingCode(secureRandom);
     const expiresAt = this.now() + PAIRING_CODE_TTL_MS;
-    this.codes.set(code, { code, bridgeId, bridgeName, expiresAt });
+    const record: PairingCodeRecord = { code, bridgeId, bridgeName, expiresAt };
+    const previousOwner = this.bridgeId;
+
     // The desktop identifies itself here; from now on its token is the one that
-    // manages this account's devices.
+    // manages this account's devices. The claim and the code are written down
+    // together, and the room only remembers them once the write has landed: a
+    // room that believes it has an owner while nothing on disk says so can be
+    // claimed by another desktop after a restart.
+    this.codes.set(code, record);
     this.bridgeId = bridgeId;
-    await this.persistOwner();
-    await this.persistCodes();
+    try {
+      await this.persistRoom();
+    } catch (error) {
+      this.codes.delete(code);
+      this.bridgeId = previousOwner;
+      throw error;
+    }
     return { code, expiresAt };
   }
 
@@ -472,7 +506,6 @@ export class RelaySession {
     // Single use: the code is consumed the moment it is claimed.
     this.codes.delete(code);
     this.failedPairAttempts = 0;
-    await this.persistCodes();
 
     const { token, expiresAt } = await issueToken(
       deviceId,
@@ -486,6 +519,8 @@ export class RelaySession {
     // re-arm a phone the desktop deliberately cut off.
     const existing = this.devices.get(deviceId);
     if (existing?.revoked) {
+      // The code is spent: it named a device the desktop cut off.
+      await this.persistRoom();
       return {
         ok: false,
         code: 'DEVICE_REVOKED',
@@ -493,7 +528,7 @@ export class RelaySession {
       };
     }
 
-    this.devices.set(deviceId, {
+    const device: DeviceRecord = {
       deviceId,
       deviceName,
       clientVersion,
@@ -501,11 +536,22 @@ export class RelaySession {
       expiresAt,
       linkedAt: this.now(),
       revoked: false,
-    });
-    // The registry is written down before the token is handed out: a phone that
-    // holds a token the registry has never heard of is a phone the relay will
-    // refuse the next time it connects.
-    await this.persistDevices();
+    };
+    this.devices.set(deviceId, device);
+    try {
+      // The registry and the consumed code are written down together, and the
+      // token is only handed out once they are: a phone that holds a token the
+      // registry has never heard of is a phone the relay will refuse the next
+      // time it connects, and a code that was burned for a pairing that never
+      // landed is a code the phone has to ask the desktop for again.
+      await this.persistRoom();
+    } catch (error) {
+      // The write failed, so the room goes back to what it was.
+      this.codes.set(code, record);
+      if (existing) this.devices.set(deviceId, existing);
+      else this.devices.delete(deviceId);
+      throw error;
+    }
 
     return { ok: true, deviceToken: token, expiresAt };
   }

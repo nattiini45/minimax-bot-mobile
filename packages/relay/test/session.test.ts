@@ -518,8 +518,16 @@ describe('bridge token revocation', () => {
       async get<T>(key: string): Promise<T | undefined> {
         return data.get(key) as T | undefined;
       },
-      async put<T>(key: string, value: T): Promise<void> {
-        data.set(key, value);
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        // A multi-key write is one transaction, the way the Durable Object's
+        // storage applies it.
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
       },
     };
   }

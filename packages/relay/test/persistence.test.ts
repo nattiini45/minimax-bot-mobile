@@ -43,8 +43,16 @@ function makeStorage() {
     async get<T>(key: string): Promise<T | undefined> {
       return data.get(key) as T | undefined;
     },
-    async put<T>(key: string, value: T): Promise<void> {
-      data.set(key, value);
+    async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+      if (typeof key === 'string') {
+        data.set(key, value);
+        return;
+      }
+      // A multi-key write is one transaction, the way the Durable Object's
+      // storage applies it.
+      for (const [entryKey, entryValue] of Object.entries(key)) {
+        data.set(entryKey, entryValue);
+      }
     },
   };
   return storage;
@@ -269,8 +277,14 @@ describe('the durable state when it misbehaves', () => {
         if (broken) throw new Error('the storage is not reachable');
         return data.get(key) as T | undefined;
       },
-      async put<T>(key: string, value: T): Promise<void> {
-        data.set(key, value);
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
       },
     };
     const target = session(storage);
@@ -293,9 +307,17 @@ describe('the durable state when it misbehaves', () => {
       async get<T>(key: string): Promise<T | undefined> {
         return data.get(key) as T | undefined;
       },
-      async put<T>(key: string, value: T): Promise<void> {
-        if (broken && key === 'seq') throw new Error('the storage is not reachable');
-        data.set(key, value);
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (broken && (typeof key === 'string' ? key : 'seq' in key)) {
+          throw new Error('the storage is not reachable');
+        }
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
       },
     };
     const target = session(storage);
@@ -310,5 +332,100 @@ describe('the durable state when it misbehaves', () => {
     broken = false;
     await settle(target);
     expect(data.get('seq')).toBe(1);
+  });
+
+  it('does not claim the account when the claim cannot be written down', async () => {
+    const data = new Map<string, unknown>();
+    let broken = true;
+    const storage = {
+      async get<T>(key: string): Promise<T | undefined> {
+        return data.get(key) as T | undefined;
+      },
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (broken) throw new Error('the storage is not reachable');
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
+      },
+    };
+    const target = session(storage);
+
+    // The claim cannot be written down, so the request fails and the room does
+    // not believe it has an owner.
+    await expect(
+      Promise.resolve().then(() => target.createPairingCode('bridge-1', 'Desk')),
+    ).rejects.toThrow('the storage is not reachable');
+
+    // A room that believes it has an owner while nothing on disk says so can be
+    // claimed by another desktop after a restart.
+    broken = false;
+    const after = session(storage);
+    expect(await after.resolveOwnerBridgeId()).toBeNull();
+  });
+
+  it('does not burn the pairing code when the registry cannot be written', async () => {
+    const data = new Map<string, unknown>();
+    let failNext = false;
+    const storage = {
+      async get<T>(key: string): Promise<T | undefined> {
+        return data.get(key) as T | undefined;
+      },
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (failNext) {
+          failNext = false;
+          throw new Error('the storage is not reachable');
+        }
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
+      },
+    };
+    const target = session(storage);
+    const { code } = await target.createPairingCode('bridge-1', 'Desk');
+
+    failNext = true;
+    await expect(
+      Promise.resolve().then(() => target.pairDevice(code, 'device-1', 'Phone', '1.0.0')),
+    ).rejects.toThrow('the storage is not reachable');
+
+    // The pairing did not land, so the code was not burned: the phone can try
+    // again with the same code instead of asking the desktop for a new one.
+    const paired = await target.pairDevice(code, 'device-1', 'Phone', '1.0.0');
+    expect(paired.ok).toBe(true);
+  });
+
+  it('revokes the bridge token even when the storage cannot be read', async () => {
+    const data = new Map<string, unknown>();
+    let broken = true;
+    const storage = {
+      async get<T>(key: string): Promise<T | undefined> {
+        if (broken) throw new Error('the storage is not reachable');
+        return data.get(key) as T | undefined;
+      },
+      async put(key: string | Record<string, unknown>, value?: unknown): Promise<void> {
+        if (typeof key === 'string') {
+          data.set(key, value);
+          return;
+        }
+        for (const [entryKey, entryValue] of Object.entries(key)) {
+          data.set(entryKey, entryValue);
+        }
+      },
+    };
+    const target = session(storage);
+
+    // A storage that cannot be read is exactly when the kill switch is wanted.
+    await target.revokeBridgeTokensBefore(Date.now() + 1_000);
+
+    broken = false;
+    expect(await target.bridgeTokenCutoff()).not.toBeNull();
   });
 });
