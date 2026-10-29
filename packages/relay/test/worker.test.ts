@@ -25,7 +25,9 @@ function fakeStub(overrides: Record<string, unknown> = {}) {
   return {
     createPairingCode: vi.fn(async () => ({ code: '123456', expiresAt: 0 })),
     pairDevice: vi.fn(async () => ({ ok: true, deviceToken: 'device-token', expiresAt: 0 })),
-    listDevices: vi.fn(async () => [{ deviceId: 'device-1', deviceName: 'Phone', token: 'secret' }]),
+    listDevices: vi.fn(async () => [
+      { deviceId: 'device-1', deviceName: 'Phone', token: 'secret', tokenHash: 'the-digest' },
+    ]),
     revokeDevice: vi.fn(async () => true),
     releaseDevice: vi.fn(async () => true),
     issueTicket: vi.fn(async () => ({ ticket: 'the-ticket', expiresAt: 0 })),
@@ -150,6 +152,9 @@ describe('the device list', () => {
 
     const body = await response.text();
     expect(body).not.toContain('secret');
+    // The registry keeps a digest of the token rather than the token; the digest is
+    // just as sensitive, so it does not travel either.
+    expect(body).not.toContain('the-digest');
   });
 
   it('is bridge-only', async () => {

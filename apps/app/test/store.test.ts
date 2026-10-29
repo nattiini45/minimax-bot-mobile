@@ -445,6 +445,29 @@ describe('the live trace', () => {
     expect(useAppStore.getState().activeTurn['bot:b1']).toBeUndefined();
     expect(useAppStore.getState().activity['bot:b1']).toBeUndefined();
   });
+
+  it('counts the rebuild, so an open conversation can be read again', () => {
+    const before = useAppStore.getState().resyncCount;
+
+    useAppStore.getState().applyFrame(
+      createFrame({ type: 'hello.ok', payload: { bridgeOnline: true, truncated: true }, source: 'relay' }),
+    );
+
+    // The projection was dropped, so the screen showing a conversation has to
+    // read the thread again. It cannot tell that from the messages alone - they
+    // are simply gone - so the count is what tells it.
+    expect(useAppStore.getState().resyncCount).toBe(before + 1);
+  });
+
+  it('does not count a rebuild when nothing was lost', () => {
+    const before = useAppStore.getState().resyncCount;
+
+    useAppStore.getState().applyFrame(
+      createFrame({ type: 'hello.ok', payload: { bridgeOnline: true, truncated: false }, source: 'relay' }),
+    );
+
+    expect(useAppStore.getState().resyncCount).toBe(before);
+  });
 });
 
 describe('reactions', () => {

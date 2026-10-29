@@ -11,7 +11,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { newId, type PeerRole, type TokenPayload } from '@minimax-bot/protocol';
 
 import { accountIdFromPath } from './account-path.js';
-import { RelaySession, type PeerSocket, type SocketLike } from './session.js';
+import { RelaySession, type DeviceRecord, type PeerSocket, type SessionStatus, type SocketLike } from './session.js';
 
 export interface RelayEnv {
   RELAY_SECRET: string;
@@ -42,7 +42,7 @@ export class Relay extends DurableObject<RelayEnv> {
 
   // -- RPC surface used by the Worker --------------------------------------
 
-  createPairingCode(bridgeId: string, bridgeName: string): { code: string; expiresAt: number } {
+  createPairingCode(bridgeId: string, bridgeName: string): Promise<{ code: string; expiresAt: number }> {
     return this.session.createPairingCode(bridgeId, bridgeName);
   }
 
@@ -86,7 +86,7 @@ export class Relay extends DurableObject<RelayEnv> {
     return this.session.pairDevice(code, deviceId, deviceName, clientVersion);
   }
 
-  revokeDevice(deviceId: string): boolean {
+  revokeDevice(deviceId: string): Promise<boolean> {
     return this.session.revokeDevice(deviceId);
   }
 
@@ -105,20 +105,20 @@ export class Relay extends DurableObject<RelayEnv> {
    *
    * The token has to be the one this account's registry issued to that device.
    */
-  releaseDevice(deviceId: string, token: string): boolean {
+  releaseDevice(deviceId: string, token: string): Promise<boolean> {
     return this.session.releaseDevice(deviceId, token);
   }
 
-  listDevices() {
+  listDevices(): Promise<DeviceRecord[]> {
     return this.session.listDevices();
   }
 
   /** The bridge that owns this account, or null if no bridge has claimed it yet. */
-  ownerBridgeId(): string | null {
-    return this.session.ownerBridgeId;
+  ownerBridgeId(): Promise<string | null> {
+    return this.session.resolveOwnerBridgeId();
   }
 
-  status() {
+  status(): Promise<SessionStatus> {
     return this.session.status();
   }
 
@@ -212,6 +212,15 @@ export class Relay extends DurableObject<RelayEnv> {
     });
 
     if (role === 'device') {
+      // The hello is built without an await, so it cannot disagree with the replay
+      // that was computed a moment earlier.
+      //
+      // The counter below and the replay above have to come from the same instant.
+      // An await here would let a frame from the bridge arrive in between: the
+      // counter would move on, that frame would reach the phone *before* the hello,
+      // and the replayed frames that follow would then be discarded by the phone as
+      // frames it had already seen. The phone would have a hole in its view and
+      // nothing would tell it so. That is why both are read synchronously here.
       const hello = {
         v: 1,
         id: newId('hello'),
@@ -220,7 +229,7 @@ export class Relay extends DurableObject<RelayEnv> {
         source: 'relay' as const,
         payload: {
           seq: this.session.lastSeq,
-          bridgeOnline: this.session.status().bridgeOnline,
+          bridgeOnline: this.session.bridgeOnline,
           truncated: registered.replay.truncated,
         },
       };
