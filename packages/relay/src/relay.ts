@@ -212,7 +212,15 @@ export class Relay extends DurableObject<RelayEnv> {
     });
 
     if (role === 'device') {
-      const status = await this.session.status();
+      // The hello is built without an await, so it cannot disagree with the replay
+      // that was computed a moment earlier.
+      //
+      // The counter below and the replay above have to come from the same instant.
+      // An await here would let a frame from the bridge arrive in between: the
+      // counter would move on, that frame would reach the phone *before* the hello,
+      // and the replayed frames that follow would then be discarded by the phone as
+      // frames it had already seen. The phone would have a hole in its view and
+      // nothing would tell it so. That is why both are read synchronously here.
       const hello = {
         v: 1,
         id: newId('hello'),
@@ -221,7 +229,7 @@ export class Relay extends DurableObject<RelayEnv> {
         source: 'relay' as const,
         payload: {
           seq: this.session.lastSeq,
-          bridgeOnline: status.bridgeOnline,
+          bridgeOnline: this.session.bridgeOnline,
           truncated: registered.replay.truncated,
         },
       };

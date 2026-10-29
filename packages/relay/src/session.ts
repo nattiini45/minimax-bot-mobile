@@ -791,7 +791,7 @@ export class RelaySession {
       if (!device.revoked) activeDevices += 1;
     }
     return {
-      bridgeOnline: this.bridgeSocket !== null,
+      bridgeOnline: this.bridgeOnline,
       deviceCount: this.devices.size,
       activeDevices,
       lastSeq: this.seq,
@@ -800,6 +800,17 @@ export class RelaySession {
 
   get lastSeq(): number {
     return this.seq;
+  }
+
+  /**
+   * Whether the desktop is attached to this room.
+   *
+   * It is in-memory state, so it can be read without waiting for anything - which
+   * matters because the hello the phone receives on connecting is built from it,
+   * and an await in the middle of that would let a frame overtake the hello.
+   */
+  get bridgeOnline(): boolean {
+    return this.bridgeSocket !== null;
   }
 
   get deviceSocketCount(): number {
