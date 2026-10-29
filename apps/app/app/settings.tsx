@@ -7,7 +7,7 @@ import { Card, Pill, SectionHeader } from '../src/components/primitives';
 import { NavRow } from '../src/components/ConnectionBanner';
 import { tapMedium } from '../src/native/haptics';
 import { useTheme } from '../src/theme';
-import { disconnectRelay, useAppStore } from '../src/state/store';
+import { unpairPhone, useAppStore } from '../src/state/store';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: 'idle',
@@ -23,14 +23,18 @@ export default function SettingsScreen() {
   const status = useAppStore((state) => state.status);
   const bridgeOnline = useAppStore((state) => state.bridgeOnline);
   const diagnostics = useAppStore((state) => state.diagnostics);
-  const setSession = useAppStore((state) => state.setSession);
   const setError = useAppStore((state) => state.setError);
 
-  const unpair = () => {
+  const unpair = async () => {
     tapMedium();
-    disconnectRelay();
-    setSession(null);
-    setError(null);
+    // The relay is told before the phone forgets its token: a phone that only
+    // forgets its own token leaves a working credential behind on the relay.
+    const released = await unpairPhone();
+    setError(
+      released
+        ? null
+        : 'This phone forgot its token, but the relay could not be reached. Revoke it in the desktop’s device list.',
+    );
     router.back();
   };
 

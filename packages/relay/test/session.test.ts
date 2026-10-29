@@ -142,6 +142,59 @@ describe('pairing', () => {
   });
 });
 
+describe('a device releasing its own token', () => {
+  it('revokes the device the token was issued to', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const token = paired.deviceToken!;
+
+    expect(session.releaseDevice('device-1', token)).toBe(true);
+    expect(session.listDevices()[0]?.revoked).toBe(true);
+  });
+
+  it('makes the token stop working', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    const token = paired.deviceToken!;
+    session.releaseDevice('device-1', token);
+
+    const registered = await session.registerSocket({
+      id: 'peer-1',
+      role: 'device',
+      subject: 'device-1',
+      token,
+      socket: new FakeSocket(),
+    });
+
+    expect(registered.ok).toBe(false);
+  });
+
+  it('does not release a device whose token was not presented', async () => {
+    const session = makeSession();
+    await pair(session, 'device-1');
+
+    // A token that is not the one the registry issued must not revoke anything.
+    expect(session.releaseDevice('device-1', 'some-other-token')).toBe(false);
+    expect(session.listDevices()[0]?.revoked).toBe(false);
+  });
+
+  it('does not release a device that has the same id in another account', async () => {
+    // The id is not enough: the token has to be the one this account's registry
+    // issued, or a device from one account could unpair a device of another.
+    const session = makeSession();
+    await pair(session, 'device-1');
+
+    expect(session.releaseDevice('device-1', 'a-token-from-another-account')).toBe(false);
+    expect(session.listDevices()[0]?.revoked).toBe(false);
+  });
+
+  it('does not release a device that was never paired here', async () => {
+    const session = makeSession();
+
+    expect(session.releaseDevice('device-9', 'a-token')).toBe(false);
+  });
+});
+
 describe('socket registration', () => {
   it('rejects a device with a bad token and says why', async () => {
     const session = makeSession();
