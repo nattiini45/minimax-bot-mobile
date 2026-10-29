@@ -7,6 +7,7 @@
  */
 
 import { AgentRunner, authorIdFor } from './agent.mjs';
+import { saveConfig } from './config.mjs';
 import { Ledger } from './ledger.mjs';
 import { PendingSet } from './pending.mjs';
 import { RelayClient } from './relay-client.mjs';
@@ -829,6 +830,13 @@ export class Bridge {
   async rotateToken() {
     const token = await this.relay.rotateToken();
     this.config = { ...this.config, bridgeToken: token };
+    // The bridge writes the token down itself. The bridge can rotate while it is
+    // starting, before anything else has had a chance to listen — a rotation
+    // that was not persisted would leave the desktop holding a token the relay
+    // has already revoked.
+    if (this.context?.dataDir && this.config) {
+      await saveConfig(this.context.dataDir, this.config);
+    }
     if (this.onToken) await this.onToken(token);
     this.logger.info('the bridge token was rotated');
     return token;
