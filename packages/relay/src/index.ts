@@ -9,6 +9,7 @@
 import { describeRelayError, verifyToken, type RelayErrorCode } from '@minimax-bot/protocol';
 
 import { accountIdFromPath } from './account-path.js';
+import { isBridgeTokenForAccount } from './authorize.js';
 import { Relay, type RelayEnv } from './relay.js';
 
 // The Durable Object must be exported from the entrypoint so Wrangler can bind it.
@@ -88,7 +89,7 @@ export default {
         if (!bridgeId || !token) {
           return relayError('BAD_REQUEST', 'bridgeId and a bearer token are required', 400);
         }
-        const verified = await verifyBridge(token, bridgeId, env.RELAY_SECRET);
+        const verified = await verifyBridge(token, bridgeId, accountId, env.RELAY_SECRET);
         if (!verified) {
           return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
         }
@@ -125,7 +126,7 @@ export default {
       if (rest[0] === 'devices' && rest[1] && request.method === 'GET') {
         // The device list carries credentials, so it is bridge-only. The phone never
         // needs it; the desktop is the one that shows the paired devices.
-        const authorized = await authorizeBridge(request, stub, env.RELAY_SECRET);
+        const authorized = await authorizeBridge(request, stub, accountId, env.RELAY_SECRET);
         if (!authorized) {
           return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
         }
@@ -140,7 +141,7 @@ export default {
       if (rest[0] === 'devices' && rest[1] && request.method === 'DELETE') {
         // Revocation is a privileged action: without this check anyone who guessed
         // the account id could unpair a phone.
-        const authorized = await authorizeBridge(request, stub, env.RELAY_SECRET);
+        const authorized = await authorizeBridge(request, stub, accountId, env.RELAY_SECRET);
         if (!authorized) {
           return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
         }
@@ -183,28 +184,36 @@ function bearer(request: Request): string {
   return match?.[1]?.trim() ?? '';
 }
 
-async function verifyBridge(token: string, bridgeId: string, secret: string): Promise<boolean> {
+async function verifyBridge(
+  token: string,
+  bridgeId: string,
+  accountId: string,
+  secret: string,
+): Promise<boolean> {
   const payload = await verifyToken(token, secret);
-  return payload !== null && payload.role === 'bridge' && payload.sub === bridgeId;
+  if (!isBridgeTokenForAccount(payload, accountId)) return false;
+  return payload.sub === bridgeId;
 }
 
 /**
  * Authorises a privileged, account-scoped action (listing or revoking devices).
  *
- * The token must be a valid bridge token, and it must name the bridge that owns this
- * account — otherwise a desktop of one account could unpair the phones of another.
- * An account that no bridge has claimed yet has nothing to protect, so any valid
- * bridge token is accepted there.
+ * The token must be a valid bridge token bound to *this* account, and it must
+ * name the bridge that owns the account — otherwise a desktop of one account
+ * could unpair the phones of another. An account that no bridge has claimed yet
+ * has nothing to protect, so the owner check passes for any bridge token; the
+ * account check does not, because the token still has to be for this account.
  */
 async function authorizeBridge(
   request: Request,
   stub: DurableObjectStub<Relay>,
+  accountId: string,
   secret: string,
 ): Promise<boolean> {
   const token = bearer(request);
   if (!token) return false;
   const payload = await verifyToken(token, secret);
-  if (!payload || payload.role !== 'bridge') return false;
+  if (!isBridgeTokenForAccount(payload, accountId)) return false;
   const owner = await stub.ownerBridgeId();
   return owner === null || payload.sub === owner;
 }
