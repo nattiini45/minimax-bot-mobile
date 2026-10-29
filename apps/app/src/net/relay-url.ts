@@ -50,12 +50,22 @@ export function relayWsUrl(url: string): string {
  *
  * Two addresses that name one relay have one origin, so an address can be
  * compared with the origin a credential was minted for.
+ *
+ * The userinfo part is not part of the origin and is dropped: `https://relay.example
+ * @evil.example` reaches `evil.example`, and an origin that still named
+ * `relay.example` would tell the user they are talking to the wrong host.
  */
 export function relayOrigin(url: string): string {
   const http = relayHttpUrl(url).trim().replace(/\/+$/, '');
   const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/\s]+)/i.exec(http);
   if (!match) return '';
-  return `${match[1]!.toLowerCase()}//${match[2]!.toLowerCase()}`;
+  const scheme = match[1]!.toLowerCase();
+  const authority = match[2]!.toLowerCase();
+  // Everything before the last `@` is the userinfo, which the host does not include.
+  const at = authority.lastIndexOf('@');
+  const host = at >= 0 ? authority.slice(at + 1) : authority;
+  if (!host) return '';
+  return `${scheme}//${host}`;
 }
 
 /**
@@ -82,6 +92,9 @@ export function isValidRelayUrl(url: string): boolean {
 
   const scheme = match[1]!.toLowerCase();
   const authority = match[2]!.toLowerCase();
+  // A relay address never carries credentials, and `https://relay.example@evil.example`
+  // is an address that reaches `evil.example` while it reads like the trusted relay.
+  if (authority.includes('@')) return false;
   if (scheme === 'https' || scheme === 'wss') return true;
 
   // Cleartext is the relay on this device and nothing else.

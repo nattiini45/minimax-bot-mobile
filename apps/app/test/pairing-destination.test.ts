@@ -91,4 +91,17 @@ describe('sending the pairing code', () => {
     expect(result.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('does not send the code to an address that hides its host behind a userinfo part', async () => {
+    // This address reaches `evil.example` while it reads like the trusted relay.
+    const result = await pairWithCode({
+      ...base,
+      url: 'https://relay.example.workers.dev@evil.example',
+      known: { buildOrigin: BUILD_ORIGIN },
+      confirmed: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
