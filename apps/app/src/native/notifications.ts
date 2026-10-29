@@ -68,11 +68,29 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
-export async function notify(title: string, body: string): Promise<void> {
+/**
+ * The body of every notification.
+ *
+ * A notification's content is shown on the lock screen, to anyone who can see the
+ * phone, and the text of a message from the team can be work detail the owner
+ * would not put there. So the body says what happened and not what was said: the
+ * title still names the chat, so the notification is worth acting on, and the
+ * message itself is read in the app.
+ */
+const NOTIFICATION_BODY = 'New message';
+
+/**
+ * Schedules a notification.
+ *
+ * There is no body parameter, and there is not going to be one: the only way to
+ * keep the text of a conversation off the lock screen is for the text never to
+ * reach the notification in the first place.
+ */
+export async function notify(title: string): Promise<void> {
   if (!supported()) return;
   try {
     await notifications!.scheduleNotificationAsync({
-      content: { title, body },
+      content: { title, body: NOTIFICATION_BODY },
       trigger: null,
     });
   } catch {
