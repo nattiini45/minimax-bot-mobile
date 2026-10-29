@@ -51,6 +51,15 @@ test('a request that names another host is refused', () => {
   }
 });
 
+test('a request that names another loopback address is refused', () => {
+  // The bridge is reachable on the address the Host assigned, not on every
+  // loopback address of the machine.
+  for (const host of ['127.0.0.2:53378', '127.1.2.3:53378', '[::1]:53378']) {
+    const verdict = checkCaller(requestWith({ host }), SURFACE);
+    assert.equal(verdict.ok, false, `expected ${host} to be refused`);
+  }
+});
+
 test('a request that names another port is refused', () => {
   const verdict = checkCaller(requestWith({ host: '127.0.0.1:1234' }), SURFACE);
   assert.equal(verdict.ok, false);
@@ -77,11 +86,29 @@ test('a request from the surface origin is welcome', () => {
   assert.equal(verdict.ok, true);
 });
 
-test('a request from another loopback port is refused', () => {
-  // Another page on this machine is a different origin, even though it is
-  // loopback.
+test('a request from another loopback origin is refused', () => {
+  // Another origin on this machine is another origin, even when it is loopback.
+  for (const origin of [
+    'http://127.0.0.2:53378',
+    'http://localhost:53378',
+    'http://127.0.0.1:1234',
+    'http://127.0.0.1',
+    'ws://127.0.0.1:53378',
+    'file://127.0.0.1:53378',
+  ]) {
+    const verdict = checkCaller(
+      requestWith({ host: '127.0.0.1:53378', origin }),
+      SURFACE,
+    );
+    assert.equal(verdict.ok, false, `expected ${origin} to be refused`);
+  }
+});
+
+test('a request with an opaque origin is refused', () => {
+  // `null` is what a sandboxed page sends. It is not an origin this surface can
+  // have, so it is not one it accepts.
   const verdict = checkCaller(
-    requestWith({ host: '127.0.0.1:53378', origin: 'http://127.0.0.1:1234' }),
+    requestWith({ host: '127.0.0.1:53378', origin: 'null' }),
     SURFACE,
   );
   assert.equal(verdict.ok, false);
@@ -90,6 +117,15 @@ test('a request from another loopback port is refused', () => {
 test('a cross-site request is refused', () => {
   const verdict = checkCaller(
     requestWith({ host: '127.0.0.1:53378', 'sec-fetch-site': 'cross-site' }),
+    SURFACE,
+  );
+  assert.equal(verdict.ok, false);
+});
+
+test('a repeated sec-fetch-site header is refused', () => {
+  // A repeated header is joined with a comma, so the value is read as a list.
+  const verdict = checkCaller(
+    requestWith({ host: '127.0.0.1:53378', 'sec-fetch-site': 'cross-site, same-origin' }),
     SURFACE,
   );
   assert.equal(verdict.ok, false);
