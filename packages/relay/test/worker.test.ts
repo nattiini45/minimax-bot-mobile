@@ -54,8 +54,8 @@ async function deviceToken(deviceId = 'device-1') {
   return token;
 }
 
-async function bridgeToken(bridgeId = 'bridge-1') {
-  const { token } = await issueToken(bridgeId, 'bridge', 60_000, SECRET, { accountId: ACCOUNT });
+async function bridgeToken(bridgeId = 'bridge-1', accountId = ACCOUNT) {
+  const { token } = await issueToken(bridgeId, 'bridge', 60_000, SECRET, { accountId });
   return token;
 }
 
@@ -176,6 +176,36 @@ describe('the account status', () => {
   it('is not answered to a phone the account does not know', async () => {
     const stub = fakeStub({ authorizesDevice: vi.fn(async () => false) });
     const token = await deviceToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.status).not.toHaveBeenCalled();
+  });
+
+  it('is not answered to a desktop of another account', async () => {
+    const stub = fakeStub();
+    const token = await bridgeToken('bridge-1', 'another-account');
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.status).not.toHaveBeenCalled();
+  });
+
+  it('is not answered to a desktop whose token was revoked', async () => {
+    const stub = fakeStub({ isBridgeTokenRevoked: vi.fn(async () => true) });
+    const token = await bridgeToken();
 
     const response = await worker.fetch(
       new Request(`https://relay.example/r/${ACCOUNT}/status`, {

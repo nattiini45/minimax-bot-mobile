@@ -174,7 +174,7 @@ prefixed `/r/:accountId`.
 | `/r/:accountId/ws` | GET (upgrade) | `role`, `subject`, `token` in the query | WebSocket for the bridge or a device |
 | `/r/:accountId/pair/code` | POST | `Authorization: Bearer <bridge token>` | Issue a pairing code |
 | `/r/:accountId/pair` | POST | — | Exchange a pairing code for a device token |
-| `/r/:accountId/status` | GET | bridge or device token | `{ bridgeOnline, deviceCount, activeDevices, lastSeq }` |
+| `/r/:accountId/status` | GET | bridge or device token, or a ticket for one | `{ bridgeOnline, deviceCount, activeDevices, lastSeq }` |
 | `/r/:accountId/devices` | GET | bridge token | List paired devices |
 | `/r/:accountId/devices/:deviceId` | DELETE | bridge token | Revoke a device |
 | `/r/:accountId/devices/me` | DELETE | device token | A device releases its own token |
