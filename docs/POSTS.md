@@ -19,6 +19,29 @@ public artifact, carries the creation note, and uses `#MiniMaxCode`.
 > **Keep every post public** until the winners are announced. Do not delete, edit to hide, or
 > post to a private channel only.
 
+## Post these three
+
+| # | Where | What | Size |
+| --- | --- | --- | --- |
+| 1 | Discord → `🧩丨show-your-case` | the block in section 1 | 1 704 characters, one message |
+| 2 | Reddit → one technical subreddit | the title and body in section 2 | 121 + 3 081 characters |
+| 3 | X → one thread | the five posts in section 3 | each under 280 characters |
+
+**Order matters.** Post the Discord entry first: it is the one the contest actually collects.
+Post it *before* Nov 3 — ideally by Nov 1, so there is time to fix anything that breaks.
+
+**Reddit, one choice.** `r/reactnative` reaches the people who would actually use this and
+allows project posts; `r/SideProject` is the most permissive about self-promotion. Either
+works — a technical write-up reads as a write-up, not an advertisement. Do not post the same
+body to both. Check the subreddit's rules before you post.
+
+**What must be visible in every post:** the live link, the source link, the demo video link,
+the words *MiniMax Code* and *M3.1 Flash*, and `#MiniMaxCode`.
+
+**What must never appear:** a pairing code, a token, a local file path, a real name, or
+anything from the team's private memory. The screenshots and the video were recorded against
+the deployed relay and carry none of it.
+
 ---
 
 ## 1. Discord — `🧩丨show-your-case`
@@ -128,26 +151,39 @@ Questions welcome. Especially about the relay design and the build pipeline.
 
 ## 3. X / Twitter
 
-Post as a thread. Attach the screenshots, link the live app in the first post.
+Post as a thread — five posts, each under X's 280-character limit. Attach the screenshots to
+the first post.
+
+**Post 1/5**
 
 ```
-I built a native app for the @minimax-bot team — Android, iOS and PWA from one codebase —
-with M3.1 Flash in MiniMax Code. #MiniMaxCode
+I built a native app for the @minimax-bot team — Android, iOS and PWA from one codebase — with M3.1 Flash in MiniMax Code. #MiniMaxCode
+```
 
-The model did the engineering, not just the typing. It worked against a live six-bot team and
-found six real bugs, including a build-pipeline trap that shipped a stale package and crashed
-the app on launch.
+**Post 2/5**
 
-It also found that my client was throwing away the tool-call events the bridge already sent.
-Wiring them up turns a reply from a long silence into a live trace:
+```
+The model did the engineering, not just the typing. It worked against a live six-bot team and found six real bugs, including a build-pipeline trap that shipped a stale package and crashed the app on launch.
+```
+
+**Post 3/5**
+
+```
+It also found that my client was throwing away the tool-call events the bridge already sent. Wiring them up turns a reply from a long silence into a live trace:
 
   tool_search · 15ms
   mcp_invoke · 20ms
+```
 
-Then I had three independent reviewers read the code with fresh eyes. They found six more
-defects that would have shipped — including a regression test that passed against the very
-code it was meant to catch.
+**Post 4/5**
 
+```
+Then I had three independent reviewers read the code with fresh eyes. They found six more defects that would have shipped — including a regression test that passed against the very code it was meant to catch.
+```
+
+**Post 5/5**
+
+```
 Live app: https://n5qi7wnkhcwnd.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
 Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
