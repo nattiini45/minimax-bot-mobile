@@ -443,7 +443,7 @@ export class Bridge {
 
     // Claim the slot before awaiting, so a concurrent duplicate cannot slip past.
     /** @type {Promise<{ok: boolean, value?: unknown, error?: unknown}>} */
-    const promise = this.dispatch(frame.type, frame.payload ?? {}).then(
+    const promise = this.dispatch(frame.type, frame.payload ?? {}, frame.from).then(
       (value) => ({ ok: true, value }),
       (error) => ({ ok: false, error }),
     );
@@ -456,6 +456,26 @@ export class Bridge {
     } else {
       this.replyError(frame, outcome.error);
     }
+  }
+
+  /**
+   * Revokes a paired phone.
+   *
+   * The revocation is written down with the decisions: it is a change to who may
+   * reach the relay, and a record of what was allowed is only worth something if
+   * the changes are in it too.
+   */
+  async revokeDevice(deviceId) {
+    const revoked = await this.relay.revokeDevice(deviceId);
+    if (revoked) {
+      this.ledger.recordAccessChange({
+        action: 'device-revoked',
+        subject: deviceId,
+        detail: 'the phone cannot reach the relay any more',
+      });
+      await this.ledger.persist();
+    }
+    return revoked;
   }
 
   reply(frame, result) {
@@ -499,15 +519,34 @@ export class Bridge {
 
   // -- dispatch ------------------------------------------------------------
 
-  async dispatch(type, payload) {
+  /**
+   * Runs one operation.
+   *
+   * @param {string} [from] the phone the relay says sent it, when it knows
+   */
+  async dispatch(type, payload, from) {
     switch (type) {
       case 'op.send_message':
         return this.sendMessage(payload);
       case 'op.abort_turn':
         return { aborted: this.runner.abort(payload.turnId) };
-      case 'op.respond_permission':
+      case 'op.respond_permission': {
+        // The request is read before the reply: answering it takes it off the
+        // pending set, and the record needs the tool it was about.
+        const request = this.pending.get(payload.requestId);
         await this.runner.reply(payload.requestId, payload.decision);
+        // The decision is a record of what was allowed and by whom, so it is
+        // written down: the request, the tool it was about, the phone that
+        // answered and the answer itself.
+        this.ledger.recordPermission({
+          requestId: payload.requestId,
+          toolName: request?.request?.toolName ?? 'unknown',
+          deviceId: from ?? 'unknown',
+          decision: payload.decision,
+        });
+        await this.ledger.persist();
         return { requestId: payload.requestId, decision: payload.decision };
+      }
       case 'op.answer_question':
         await this.runner.answer(payload.requestId, payload.answers ?? []);
         return { requestId: payload.requestId };
@@ -837,6 +876,14 @@ export class Bridge {
     if (this.context?.dataDir && this.config) {
       await saveConfig(this.context.dataDir, this.config);
     }
+    // A rotation is a change to who may reach the relay: every token issued
+    // before it is dead. It is written down with the decisions.
+    this.ledger.recordAccessChange({
+      action: 'bridge-token-rotated',
+      subject: this.config?.bridgeId ?? 'unknown',
+      detail: 'the previous bridge token was revoked',
+    });
+    await this.ledger.persist();
     if (this.onToken) await this.onToken(token);
     this.logger.info('the bridge token was rotated');
     return token;

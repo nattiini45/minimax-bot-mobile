@@ -101,6 +101,41 @@ export class Ledger {
     });
   }
 
+  /**
+   * Records a permission decision.
+   *
+   * A decision is not a tool call and it is not usage: it is a record of what
+   * was allowed, by which phone, and when. It is kept so that the answer can be
+   * attributed later.
+   */
+  recordPermission({ requestId, toolName, deviceId, decision }) {
+    this.push({
+      ts: Date.now(),
+      kind: 'permission',
+      requestId,
+      toolName,
+      deviceId,
+      decision,
+    });
+  }
+
+  /**
+   * Records a change to who may reach the relay.
+   *
+   * A revoked phone and a rotated bridge token are the two moments when the set
+   * of people who can drive the desktop changes. A record of what was allowed is
+   * only worth something if the changes are in it too.
+   */
+  recordAccessChange({ action, subject, detail }) {
+    this.push({
+      ts: Date.now(),
+      kind: 'access',
+      action,
+      subject,
+      detail,
+    });
+  }
+
   push(entry) {
     this.entries.push(entry);
     if (this.entries.length > this.maxEntries) {
@@ -151,6 +186,10 @@ export class Ledger {
 
     for (const entry of this.entries) {
       if (entry.ts < startMs) continue;
+      // A decision and an access change are records, not usage. They say what
+      // was allowed and by whom, and counting them as tool calls would put them
+      // into the usage totals and into a bot that is not there.
+      if (entry.kind !== 'turn' && entry.kind !== 'tool') continue;
       const bucket = buckets.get(bucketKey(new Date(entry.ts), hourly));
       if (!bucket) continue;
 

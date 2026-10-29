@@ -83,11 +83,13 @@ function frame(overrides: Record<string, unknown> = {}): string {
 describe('a frame the relay accepts', () => {
   it('forwards a well-formed frame from a phone to the desktop', async () => {
     const { session, bridgeSocket } = await connected();
-    const raw = frame();
 
-    session.handleFrame(DEVICE_PEER, raw);
+    session.handleFrame(DEVICE_PEER, frame());
 
-    expect(bridgeSocket.sent).toEqual([raw]);
+    expect(bridgeSocket.sent).toHaveLength(1);
+    const forwarded = JSON.parse(bridgeSocket.sent[0]!);
+    expect(forwarded.type).toBe('op.list_team');
+    expect(forwarded.from).toBe('device-1');
   });
 
   it('stamps an event from the desktop with its own number', async () => {
@@ -150,6 +152,32 @@ describe('a frame the contract does not allow', () => {
     session.handleFrame(BRIDGE_PEER, frame({ type: 'evt.team_snapshot', source: 'bridge', id: '' }));
 
     expect(deviceSocket.sent).toEqual([]);
+  });
+});
+
+describe('the sender belongs to the relay', () => {
+  it('is named on a frame on its way to the desktop', async () => {
+    const { session, bridgeSocket } = await connected();
+
+    session.handleFrame(DEVICE_PEER, frame());
+
+    // The desktop has to know which phone sent the frame: a permission decision
+    // is only worth recording if the record says who made it, and the relay is
+    // the only thing that knows which socket the frame came from.
+    const forwarded = JSON.parse(bridgeSocket.sent[0]!);
+    expect(forwarded.from).toBe('device-1');
+    // The rest of the frame is untouched.
+    expect(forwarded.type).toBe('op.list_team');
+    expect(forwarded.payload).toEqual({});
+  });
+
+  it('is not taken from a phone', async () => {
+    const { session, bridgeSocket } = await connected();
+
+    // A phone that names the sender is a phone claiming to be another phone.
+    session.handleFrame(DEVICE_PEER, frame({ from: 'someone-else' }));
+
+    expect(bridgeSocket.sent).toEqual([]);
   });
 });
 
