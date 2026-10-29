@@ -32,7 +32,7 @@ import {
   type TokenPayload,
 } from '@minimax-bot/protocol';
 
-import { SeqRing, type RingEntry } from './ring.js';
+import { SeqRing, byteLength, DEFAULT_RING_MAX_BYTES, type RingEntry } from './ring.js';
 
 /**
  * How long a ticket for a single connection is good for.
@@ -84,6 +84,13 @@ export interface PairingCodeRecord {
 export interface SessionOptions {
   secret: string;
   ringCapacity?: number;
+  /**
+   * How many bytes the replay buffer keeps.
+   *
+   * The buffer holds frames, and a frame is whatever the sender produced, so the entry
+   * count alone does not say how much memory the room is holding.
+   */
+  ringMaxBytes?: number;
   deviceTokenTtlMs?: number;
   now?: () => number;
   /**
@@ -143,6 +150,16 @@ export interface SessionStatus {
 }
 
 const DEFAULT_RING_CAPACITY = 512;
+
+/**
+ * The largest frame the relay accepts, in bytes.
+ *
+ * The bridge's own surface caps a request body at 256 KB, so nothing that a peer is
+ * expected to send is larger than this. A frame that is larger is dropped rather than
+ * buffered: the relay's buffer is bounded by an entry count and by a byte count, but a
+ * frame that is kept stays resident until enough later frames push it out.
+ */
+const MAX_FRAME_BYTES = 256 * 1024;
 
 /**
  * Wrong pairing codes allowed per window before the account starts refusing.
@@ -233,7 +250,10 @@ export class RelaySession {
 
   constructor(options: SessionOptions) {
     this.secret = options.secret;
-    this.ring = new SeqRing(options.ringCapacity ?? DEFAULT_RING_CAPACITY);
+    this.ring = new SeqRing(
+      options.ringCapacity ?? DEFAULT_RING_CAPACITY,
+      options.ringMaxBytes ?? DEFAULT_RING_MAX_BYTES,
+    );
     this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEVICE_TOKEN_TTL_MS;
     this.now = options.now ?? (() => Date.now());
     this.storage = options.storage;
@@ -928,6 +948,13 @@ export class RelaySession {
    * monotonic `seq`, buffered, and fanned out to every connected device.
    */
   handleFrame(from: PeerSocket, raw: string): void {
+    // A frame is dropped rather than buffered when it is larger than the relay
+    // accepts. The buffer's memory is bounded by an entry count and by a byte count,
+    // but a single frame that is kept is a single frame that stays resident until
+    // five hundred more arrive, so the size is checked here, on the way in.
+    if (raw.length > MAX_FRAME_BYTES) return;
+    if (byteLength(raw) > MAX_FRAME_BYTES) return;
+
     // Every frame a peer sends is checked against the shared contract before the
     // relay acts on it. The relay does not interpret payloads, but it does rely
     // on the envelope: it routes by type, it owns the order, and the bridge
