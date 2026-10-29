@@ -83,7 +83,10 @@ export default function ChatScreen() {
   useEffect(() => {
     if (thread.length > lastCount.current) {
       tapLight();
-      void notify(group?.name ?? bot?.name ?? 'New message', thread[thread.length - 1]?.text ?? '');
+      // The notification carries the name of the chat and nothing else. Its
+      // content is shown on the lock screen, to anyone who can see the phone, and
+      // the text of a message from the team is not theirs to put there.
+      void notify(group?.name ?? bot?.name ?? 'New message');
     }
     lastCount.current = thread.length;
   }, [thread.length, bot?.name, group?.name]);
