@@ -47,6 +47,15 @@ export interface OutboxItem {
   type: string;
   payload: unknown;
   queuedAt: number;
+  /**
+   * The account the operation was composed for.
+   *
+   * The phone holds one credential at a time, so an operation that belongs to
+   * another account can never be delivered: the room it was written for is
+   * reached with a credential this phone does not have. The outbox survives
+   * unpairing, so without this the next account's connection would flush it.
+   */
+  accountId: string;
 }
 
 export interface AppState {
@@ -437,7 +446,17 @@ export async function loadOutbox(): Promise<OutboxItem[]> {
     const raw = await AsyncStorage.getItem(OUTBOX_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as OutboxItem[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    // An entry that was written before the outbox knew its account cannot be
+    // attributed to one, and an operation that cannot be attributed to an account
+    // is never sent.
+    return parsed.map((entry) => ({
+      opId: typeof entry?.opId === 'string' ? entry.opId : '',
+      type: typeof entry?.type === 'string' ? entry.type : '',
+      payload: entry?.payload,
+      queuedAt: typeof entry?.queuedAt === 'number' ? entry.queuedAt : 0,
+      accountId: typeof entry?.accountId === 'string' ? entry.accountId : '',
+    }));
   } catch {
     return [];
   }
@@ -506,7 +525,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const sent = client?.send(frame) ?? false;
     if (!sent) {
-      const outbox = [...get().outbox, { opId, type, payload, queuedAt: Date.now() }];
+      const outbox = [
+        ...get().outbox,
+        {
+          opId,
+          type,
+          payload,
+          queuedAt: Date.now(),
+          // The account the operation was composed for, so it is never sent into
+          // another account's room.
+          accountId: get().session?.accountId ?? '',
+        },
+      ];
       set({ outbox });
       void persistOutbox(outbox);
     }
@@ -544,7 +574,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const sent = client?.send(frame) ?? false;
       if (!sent) {
-        const outbox = [...get().outbox, { opId, type, payload, queuedAt: Date.now() }];
+        const outbox = [
+          ...get().outbox,
+          {
+            opId,
+            type,
+            payload,
+            queuedAt: Date.now(),
+            // The account the operation was composed for, so it is never sent into
+            // another account's room.
+            accountId: get().session?.accountId ?? '',
+          },
+        ];
         set({ outbox });
         void persistOutbox(outbox);
       }
@@ -554,8 +595,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   flushOutbox: () => {
     const { outbox } = get();
     if (!outbox.length || !client) return;
+    const accountId = get().session?.accountId ?? '';
     const remaining: OutboxItem[] = [];
+    let stopped = false;
     for (const item of outbox) {
+      // An operation composed for another account is not sent here. The phone
+      // holds one credential at a time, so the room it belongs to cannot be
+      // reached with this connection, and sending it would put one account's
+      // content into another account's room and execute it there.
+      if (item.accountId !== accountId) continue;
+      if (stopped) {
+        remaining.push(item);
+        continue;
+      }
       const frame = {
         v: 1 as const,
         id: `f_${item.opId}`,
@@ -569,8 +621,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         // The socket went away mid-flush. Everything from here on stays queued; the
         // frames already sent keep their opId, so the bridge's dedupe makes a later
         // retry harmless.
-        remaining.push(...outbox.slice(outbox.indexOf(item)));
-        break;
+        stopped = true;
+        remaining.push(item);
       }
     }
     set({ outbox: remaining });
@@ -1011,5 +1063,9 @@ export async function unpairPhone(): Promise<boolean> {
   // The phone forgets the token either way: the local copy is the one the owner
   // asked to be gone.
   useAppStore.getState().setSession(null);
+  // The queue belongs to the account that was just left. Its operations cannot
+  // be delivered any more, and they must not be delivered to the next account.
+  useAppStore.setState({ outbox: [] });
+  void persistOutbox([]);
   return released;
 }
