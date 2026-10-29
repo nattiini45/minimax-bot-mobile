@@ -1,7 +1,43 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { isAllowedRelayUrl, relayOrigin } from '../miniapp/node/config.mjs';
+import { isAllowedRelayUrl, loadConfig, relayOrigin } from '../miniapp/node/config.mjs';
+
+test('a relay address that is not one the bridge may use is refused', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
+  try {
+    await loadConfig(dataDir, {
+      relayUrl: 'http://relay.example.workers.dev',
+      bridgeToken: 'a token',
+    });
+
+    const config = await loadConfig(dataDir, { bridgeToken: 'a token' });
+
+    // The bridge holds the long-lived token, so it never presents it to an
+    // address it cannot vouch for. The desktop is left unconfigured, which is
+    // the state a fresh install is in anyway.
+    assert.equal(config.relayUrl, '');
+    assert.equal(config.bridgeToken, 'a token');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('a secure relay address is kept', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
+  try {
+    await loadConfig(dataDir, { relayUrl: 'https://relay.example.workers.dev' });
+
+    const config = await loadConfig(dataDir);
+
+    assert.equal(config.relayUrl, 'https://relay.example.workers.dev');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
 
 test('a secure relay is allowed wherever it is', () => {
   assert.equal(isAllowedRelayUrl('https://relay.example.workers.dev'), true);

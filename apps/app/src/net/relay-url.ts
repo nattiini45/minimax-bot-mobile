@@ -45,7 +45,33 @@ export function relayWsUrl(url: string): string {
   return translate(url, TO_WS);
 }
 
-/** True when the address names a relay the app can reach. */
+/**
+ * The hosts a cleartext relay may live on.
+ *
+ * A relay on the loopback interface is on this phone's own machine — the
+ * developer runs it with `wrangler dev` — and that traffic never leaves the
+ * device. Anything else, including a relay on the same wifi, would carry the
+ * pairing code and the device token in the clear.
+ */
+const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * True when the address names a relay the app can reach.
+ *
+ * The address has to be a secure one, unless the relay is on this device. The
+ * pairing code and the device token are long-lived credentials, and a relay
+ * that answers in the clear is a relay that hands them to the network.
+ */
 export function isValidRelayUrl(url: string): boolean {
-  return /^(https?|wss?):\/\/[^\s/]+(?:\/.*)?$/i.test(url.trim());
+  const trimmed = url.trim();
+  const match = /^(https?|wss?):\/\/([^/\s]+)(?:\/.*)?$/i.exec(trimmed);
+  if (!match) return false;
+
+  const scheme = match[1]!.toLowerCase();
+  const authority = match[2]!.toLowerCase();
+  if (scheme === 'https' || scheme === 'wss') return true;
+
+  // Cleartext is the relay on this device and nothing else.
+  const host = authority.replace(/:\d+$/, '').replace(/^\[/, '').replace(/\]$/, '');
+  return LOOPBACK.test(host);
 }

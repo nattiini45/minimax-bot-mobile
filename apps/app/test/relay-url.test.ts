@@ -38,6 +38,15 @@ describe('the relay address', () => {
     expect(isValidRelayUrl('  http://127.0.0.1:8100  ')).toBe(true);
   });
 
+  it('refuses a cleartext relay that is not on this device', () => {
+    // The pairing code and the device token would cross the network in the clear.
+    expect(isValidRelayUrl('http://relay.example.workers.dev')).toBe(false);
+    expect(isValidRelayUrl('ws://relay.example.workers.dev')).toBe(false);
+    expect(isValidRelayUrl('http://192.168.1.10:8100')).toBe(false);
+    expect(isValidRelayUrl('http://10.0.0.5:8100')).toBe(false);
+    expect(isValidRelayUrl('http://169.254.169.254')).toBe(false);
+  });
+
   it('refuses an address that names nothing', () => {
     expect(isValidRelayUrl('')).toBe(false);
     expect(isValidRelayUrl('relay.example.workers.dev')).toBe(false);
