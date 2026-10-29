@@ -141,7 +141,9 @@ describe('the room across a restart', () => {
     // An account belongs to one bridge. A room that forgets its owner would let
     // the next desktop to ask for a code take the account over.
     const after = session(storage);
-    await expect(after.createPairingCode('bridge-2', 'Other')).rejects.toThrow('ACCOUNT_OWNED');
+    await expect(
+      Promise.resolve().then(() => after.createPairingCode('bridge-2', 'Other')),
+    ).rejects.toThrow('ACCOUNT_OWNED');
   });
 
   it('keeps a revoked phone revoked', async () => {
@@ -299,14 +301,14 @@ describe('the durable state when it misbehaves', () => {
     const target = session(storage);
 
     await emitEvent(target, 'f1');
-    await target.flush();
+    await settle(target);
 
     // The write failed, so the counter is not on disk yet.
     expect(data.get('seq')).toBeUndefined();
 
     // The next flush tries again, and the counter lands.
     broken = false;
-    await target.flush();
+    await settle(target);
     expect(data.get('seq')).toBe(1);
   });
 });
