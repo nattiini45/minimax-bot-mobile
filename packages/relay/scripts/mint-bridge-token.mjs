@@ -11,9 +11,10 @@
  *   node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--hours 24]
  *
  * The relay secret is read from the environment (RELAY_SECRET) or from the file
- * named by --secret-file. Passing it with --secret still works, but a command-line
- * argument lands in the shell history and in the process table, so it is the last
- * resort rather than the first.
+ * named by --secret-file. It is not accepted as a command-line argument: an
+ * argument lands in the shell history and in the process table, where anything
+ * running on the machine can read it, and the secret is worth more than every
+ * token this script can mint.
  *
  * The account is the room the token can reach. It is baked into the signed token,
  * so the relay refuses the token against any other account.
@@ -35,7 +36,6 @@ const HOUR_MS = 60 * 60 * 1000;
 
 function parseArgs(argv) {
   const options = {
-    secret: '',
     secretFile: '',
     bridgeId: '',
     bridgeName: 'Desktop',
@@ -50,9 +50,6 @@ function parseArgs(argv) {
     }
     i += 1;
     switch (key) {
-      case '--secret':
-        options.secret = value;
-        break;
       case '--secret-file':
         options.secretFile = value;
         break;
@@ -73,7 +70,10 @@ function parseArgs(argv) {
         options.hours = Number(value) * 24;
         break;
       default:
-        throw new Error(`Unknown option ${key}.`);
+        // The name of the option, never its value: an unknown option may well
+        // have been a secret, and the message would put it into the terminal
+        // scrollback and into whatever collects it.
+        throw new Error(`Unknown option ${key.split('=')[0]}.`);
     }
   }
   return options;
@@ -82,8 +82,10 @@ function parseArgs(argv) {
 /**
  * Reads the relay secret once, from the first source that has it.
  *
- * The secret is not echoed anywhere: only the bridge token is printed, and that
- * one is meant to be copied into the desktop.
+ * The secret is not echoed: only the bridge token is printed, and that one is
+ * meant to be copied into the desktop. An unknown option is reported by its
+ * name alone, so a secret that was offered on the command line does not end up
+ * in the error message.
  */
 function readSecret(options) {
   if (options.secretFile) {
@@ -100,7 +102,7 @@ function readSecret(options) {
     delete process.env.RELAY_SECRET;
     return fromEnv;
   }
-  return options.secret;
+  return '';
 }
 
 async function main() {
@@ -118,7 +120,9 @@ async function main() {
 
   const secret = readSecret(options);
   if (!secret) {
-    console.error('The relay secret is required: set RELAY_SECRET, or pass --secret-file <path>.');
+    console.error(
+      'The relay secret is required: set RELAY_SECRET, or pass --secret-file <path>. It is not read from the command line.',
+    );
     process.exit(2);
   }
   if (!options.bridgeId) {

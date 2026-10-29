@@ -24,7 +24,7 @@
     "test:app": "npm run test -w @minimax-bot/app",
     "export:web": "npm run export:web -w @minimax-bot/app",
     "build:android": "npm run build:android -w @minimax-bot/app",
-    "mint:token": "npm run mint:token -w @minimax-bot/relay",
+    "mint:token": "npm run mint:token -w @minimax-bot/relay --",
     "test:watch": "vitest",
     "sync:protocol": "npm run sync:protocol -w @minimax-bot/bridge",
     "app": "npm run start --workspace apps/app"
