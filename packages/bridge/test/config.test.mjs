@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { isAllowedRelayUrl, loadConfig, relayOrigin } from '../miniapp/node/config.mjs';
+import { isAllowedRelayUrl, loadConfig, relayOrigin, saveConfig } from '../miniapp/node/config.mjs';
 
 test('a relay address that is not one the bridge may use is refused', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
@@ -94,4 +94,91 @@ test('two different relays have different origins', () => {
 test('an address that is not a relay address has no origin', () => {
   assert.equal(relayOrigin(''), '');
   assert.equal(relayOrigin('nonsense'), '');
+});
+
+test('where the bridge token is kept', async () => {
+  const CONFIG = {
+    relayUrl: 'https://relay.example.workers.dev',
+    accountId: 'default',
+    bridgeId: 'bridge-1',
+    bridgeToken: 'the-bridge-token',
+    bridgeName: 'Desktop',
+  };
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
+  try {
+    await saveConfig(dataDir, CONFIG);
+
+    // The token is not in the configuration file: that file is the one that
+    // gets copied around.
+    const raw = await readFile(join(dataDir, 'bridge-config.json'), 'utf8');
+    assert.equal(raw.includes('the-bridge-token'), false);
+    // The rest of the configuration is still there.
+    assert.equal(raw.includes('relay.example.workers.dev'), true);
+
+    // It is in a file of its own.
+    const token = await readFile(join(dataDir, 'bridge-token'), 'utf8');
+    assert.equal(token.trim(), 'the-bridge-token');
+
+    const config = await loadConfig(dataDir);
+    assert.equal(config.bridgeToken, 'the-bridge-token');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('the token file is written for its owner only', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows has no POSIX file modes');
+    return;
+  }
+  const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
+  try {
+    await saveConfig(dataDir, {
+      relayUrl: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      bridgeId: 'bridge-1',
+      bridgeToken: 'the-bridge-token',
+      bridgeName: 'Desktop',
+    });
+
+    for (const file of ['bridge-config.json', 'bridge-token']) {
+      const info = await stat(join(dataDir, file));
+      assert.equal(info.mode & 0o777, 0o600, `expected ${file} to be 0600`);
+    }
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('a token in a configuration that still carried it is moved', async () => {
+  // A desktop that was configured before the token had a file of its own.
+  const dataDir = await mkdtemp(join(tmpdir(), 'bridge-config-'));
+  try {
+    await writeFile(
+      join(dataDir, 'bridge-config.json'),
+      `${JSON.stringify(
+        {
+          relayUrl: 'https://relay.example.workers.dev',
+          accountId: 'default',
+          bridgeId: 'bridge-1',
+          bridgeToken: 'the-bridge-token',
+          bridgeName: 'Desktop',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const config = await loadConfig(dataDir);
+
+    assert.equal(config.bridgeToken, 'the-bridge-token');
+    const raw = await readFile(join(dataDir, 'bridge-config.json'), 'utf8');
+    assert.equal(raw.includes('the-bridge-token'), false);
+    const token = await readFile(join(dataDir, 'bridge-token'), 'utf8');
+    assert.equal(token.trim(), 'the-bridge-token');
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });

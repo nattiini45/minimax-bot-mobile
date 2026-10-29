@@ -122,10 +122,14 @@ data directory:
   "relayUrl": "wss://relay.example.workers.dev",
   "accountId": "default",
   "bridgeId": "bridge_9f2c…",   // generated once, then stable
-  "bridgeToken": "<hmac token>",
   "bridgeName": "Desktop"
 }
 ```
+
+The `bridgeToken` is not in that file. It has a file of its own, `bridge-token`,
+next to it, and both files are written for their owner only (`0600`): the token is
+a credential for the account's room, and a configuration file is the one that
+gets copied into a backup or a support bundle.
 
 The `bridgeId` is generated on first run and persisted, because the relay pairs a
 phone against a *specific* desktop: after a restart the phone has to find the same

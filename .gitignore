@@ -29,3 +29,10 @@ packages/relay/.wrangler/
 
 # Scratch scaffolds created while debugging the Mini App package contract.
 miniapps/
+
+# The bridge's own state. The token is a credential for the account's room and
+# the ledger holds the conversation, so neither belongs in the repository - not
+# even when a data directory happens to sit inside it.
+bridge-config.json
+bridge-token
+ledger.json
