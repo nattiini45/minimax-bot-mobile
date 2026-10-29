@@ -166,6 +166,22 @@ export default {
       }
 
       if (rest[0] === 'status' && request.method === 'GET') {
+        // The status of an account says whether a desktop is attached to it and
+        // how many phones are paired with it. That is not for a stranger: the
+        // account id is the room's name, so a route that answers for any account
+        // is a route that can be used to find out which accounts exist and which
+        // of them are in use.
+        //
+        // A caller that holds a credential for this account - a bridge token, or
+        // the token of a phone paired with it - gets the status. A caller that
+        // does not gets the same answer for every account, so the route cannot
+        // be used to enumerate them.
+        const authorized =
+          (await authorizeBridge(request, stub, accountId, env.RELAY_SECRET)) ||
+          (await authorizeDevice(request, stub, env.RELAY_SECRET));
+        if (!authorized) {
+          return relayError('UNAUTHORIZED', 'The token is not valid.', 401);
+        }
         return json(await stub.status(), 200);
       }
 
@@ -319,4 +335,22 @@ async function authorizeBridge(
   if (await stub.isBridgeTokenRevoked(payload)) return false;
   const owner = await stub.ownerBridgeId();
   return owner === null || payload.sub === owner;
+}
+
+/**
+ * Authorises a phone that is paired with this account.
+ *
+ * The room's device registry is the list of live credentials, so it decides:
+ * a token that is not the one it issued to that phone is not the phone's token.
+ */
+async function authorizeDevice(
+  request: Request,
+  stub: DurableObjectStub<Relay>,
+  secret: string,
+): Promise<boolean> {
+  const token = bearer(request);
+  if (!token) return false;
+  const payload = await verifyToken(token, secret);
+  if (!payload || payload.role !== 'device') return false;
+  return stub.authorizesDevice(payload.sub, token);
 }

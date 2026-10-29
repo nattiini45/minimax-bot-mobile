@@ -175,7 +175,11 @@ The code lives 90 seconds. Ask the desktop for a new one and type it immediately
 **"No bridge is waiting for that code."**
 Either the code was already used (it is single use), or the desktop is not
 connected to this relay, or the `accountId` on the phone does not match the one on
-the desktop. Check `/r/:accountId/status` — `bridgeOnline` tells you which.
+the desktop. Check the account id in the MiniMax Bot Bridge window. The relay's
+`/r/:accountId/status` route says whether a desktop is attached to an account, but
+it is answered only to a credential that belongs to that account — the account id
+is the room's name, and a route that answered for any account would be a route
+that could be used to find out which accounts exist.
 
 **"This device is not paired with this bridge."**
 The device token is stale or was revoked. Pair again from the phone.

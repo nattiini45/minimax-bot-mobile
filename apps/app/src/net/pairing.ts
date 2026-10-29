@@ -56,19 +56,3 @@ export async function pairWithCode(params: {
     return { ok: false, message: 'The relay could not be reached. Check the URL and try again.' };
   }
 }
-
-/** Reads the relay status, which tells the user whether the desktop is online. */
-export async function relayStatus(url: string, accountId: string): Promise<{
-  bridgeOnline: boolean;
-  deviceCount: number;
-} | null> {
-  const base = relayHttpUrl(url);
-  try {
-    const response = await fetch(`${base}/r/${encodeURIComponent(accountId)}/status`);
-    if (!response.ok) return null;
-    const body = (await response.json()) as { bridgeOnline?: boolean; deviceCount?: number };
-    return { bridgeOnline: body.bridgeOnline === true, deviceCount: body.deviceCount ?? 0 };
-  } catch {
-    return null;
-  }
-}

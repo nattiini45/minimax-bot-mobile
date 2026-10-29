@@ -643,6 +643,19 @@ export class RelaySession {
     return [...this.devices.values()].map((device) => ({ ...device }));
   }
 
+  /**
+   * Whether a token is one this room issued to that phone.
+   *
+   * The registry is the list of live credentials, so it decides: a token that
+   * is not the one it issued to that phone is not the phone's token.
+   */
+  async authorizesDevice(deviceId: string, token: string): Promise<boolean> {
+    await this.ensureLoaded();
+    const device = this.devices.get(deviceId);
+    if (!device || device.revoked) return false;
+    return tokenMatches(device, token);
+  }
+
   // -- sockets -------------------------------------------------------------
 
   /**

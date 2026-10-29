@@ -131,9 +131,10 @@ The relay is a plain Worker, so `npx wrangler deploy` gives every phone one
 address to reach — `https://<worker>.<subdomain>.workers.dev`. Two things make
 that safe to publish:
 
-- **Every route is authenticated.** `/status` is open and says only that the
-  relay is up. Everything else needs a bearer token or a one-time pairing code;
-  there is no cookie and no session to steal.
+- **Every route is authenticated.** An account's status — whether a desktop is
+  attached to it, and how many phones are paired with it — is answered only to a
+  credential that belongs to that account. Everything else needs a bearer token or
+  a one-time pairing code; there is no cookie and no session to steal.
 - **Guessing a pairing code is rate limited.** Ten wrong codes lock the endpoint
   for a minute, a code lives for ninety seconds, and it is consumed on use. An
   account belongs to one bridge: a second bridge cannot claim it.
