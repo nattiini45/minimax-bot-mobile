@@ -19,6 +19,9 @@
     },
     "android": {
       "package": "com.minimax.botmobile",
+      "credentials": {
+        "source": "env"
+      },
       "adaptiveIcon": {
         "backgroundColor": "#fcfcfc",
         "foregroundImage": "./assets/android-icon-foreground.png",
