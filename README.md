@@ -11,6 +11,10 @@ native app.
 > Built with **M3.1 Flash** in **MiniMax Code**. The engineering diary — the six
 > real bugs the model found by working against a live team — is in
 > [`docs/CREATION-NOTE.md`](docs/CREATION-NOTE.md).
+>
+> **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io> ·
+> [Demo video](https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4) ·
+> [Live tool trace](https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png)
 
 ```
 ┌──────────────────────────┐
@@ -234,7 +238,16 @@ Two runner notes, both verified on Node 24:
 
 ## Try it in a browser
 
-The client is an Expo app, so the same code runs as a PWA:
+The client is an Expo app, so the same code runs as a PWA.
+
+**The live client is running:** <https://n5qi7wnkhcwnd.space.minimax.io>
+
+It talks to a relay that is deployed on the public internet
+(<https://minimax-bot-relay.nattiini45.workers.dev>), so a stranger can open the link,
+type the six-digit code the desktop shows and drive the real team. Nothing about the
+browser build is a demo mode: it is the same client, the same relay and the same team.
+
+To run it yourself:
 
 ```bash
 npm run build
@@ -245,6 +258,16 @@ npm run app            # or: npm run web --workspace apps/app
 Pair it with the relay address and the six-digit code from the MiniMax Bot Bridge
 window. Nothing about the browser build is a demo mode: it is the same client, the
 same relay and the same team.
+
+A published build names its relay through `EXPO_PUBLIC_RELAY_URL`, which Expo inlines
+at build time:
+
+```bash
+EXPO_PUBLIC_RELAY_URL=https://minimax-bot-relay.nattiini45.workers.dev \
+  npm run export:web --workspace apps/app
+```
+
+The field stays editable in the app, so a self-hosted relay is still one tap away.
 
 ## Two limits worth knowing
 

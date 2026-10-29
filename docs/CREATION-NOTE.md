@@ -44,7 +44,7 @@ workspace package).
 
 ## It kept the promise honest
 
-The project ships with **168 passing tests** (protocol, relay, bridge, client), and the
+The project ships with **181 passing tests** (protocol, relay, bridge, client), and the
 end-to-end run is against a live six-bot team: a real pairing code, a real streamed reply, a
 real dispatched task, real memory entries read back out of the team's own store.
 
@@ -96,6 +96,21 @@ Both found things I had read past.
 **181 tests pass**, and the new ones were written to fail against broken code: the duration
 has to be a real measurement, the call ids have to be distinct, the history has to be in
 order.
+
+## It is running on the public internet
+
+The relay is a deployed Cloudflare Worker, not a script on my laptop:
+
+- **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io>
+- **Relay:** <https://minimax-bot-relay.nattiini45.workers.dev>
+- **Demo video:** <https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4>
+
+A published build names its relay through `EXPO_PUBLIC_RELAY_URL`, which Expo inlines at build
+time, so the link above opens a client that already knows where to go — a stranger types the
+six-digit code and drives the real team. The last end-to-end run over the public path paired a
+device over HTTPS, opened the WebSocket over TLS, pulled the real six-bot roster and recorded
+**twelve tool calls with twelve distinct call ids, every start matched to its own finish, and
+no error frames in the replay**.
 
 ## Honest limits
 

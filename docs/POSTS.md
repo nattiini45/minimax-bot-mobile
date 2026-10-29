@@ -3,8 +3,18 @@
 Every post below satisfies the brief: it names **MiniMax Code** and **M3.1 Flash**, links a
 public artifact, carries the creation note, and uses `#MiniMaxCode`.
 
-> **Fill these in before posting:** `{{LIVE_APP}}` (the public PWA link), `{{REPO}}` (the public
-> repository), `{{VIDEO}}` (the demo video), `{{SCREENSHOTS}}` (the image links).
+> **The public links are filled in.**
+>
+> | Placeholder | Value |
+> | --- | --- |
+> | `LIVE_APP` | https://n5qi7wnkhcwnd.space.minimax.io |
+> | `REPO` | https://github.com/nattiini45/minimax-bot-mobile |
+> | `VIDEO` | https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4 |
+> | `SCREENSHOTS` | https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png · https://n5qi7wnkhcwnd.space.minimax.io/screenshot-team.png |
+>
+> The live app already points at the deployed relay
+> (`https://minimax-bot-relay.nattiini45.workers.dev`), so a stranger only has to type the
+> six-digit code the desktop shows.
 >
 > **Keep every post public** until the winners are announced. Do not delete, edit to hide, or
 > post to a private channel only.
@@ -19,9 +29,9 @@ This is the entry point. Post it in the channel, and post it *before* Nov 3.
 Built a native mobile app for the @minimax-bot team — one codebase for Android, iOS and PWA —
 with MiniMax Code and M3.1 Flash. #MiniMaxCode
 
-Live app (open it, it is the real client): {{LIVE_APP}}
-Source: {{REPO}}
-Demo video: {{VIDEO}}
+Live app (open it, it is the real client): https://n5qi7wnkhcwnd.space.minimax.io
+Source: https://github.com/nattiini45/minimax-bot-mobile
+Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
 
 What it is: a Mini App plugin drives the real six-bot team (Chief, Engineer, Reviewer,
 Researcher, Writer, Game Dev) over the real team tools, a Cloudflare Worker carries the frames,
@@ -41,7 +51,7 @@ test that passed against the very code it was meant to catch, and a tool trace t
 the wrong call whenever the same tool ran twice in a turn. 181 tests pass now, and the new
 ones were written to fail against broken code.
 
-Creation note: {{REPO}}/blob/main/docs/CREATION-NOTE.md
+Creation note: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
 ```
 
 ---
@@ -66,8 +76,8 @@ MiniMax Code can run a team of agents on your desktop. What it could not do was 
 to that team from your phone.
 
 So I built one: https://github.com/nattiini45/minimax-bot-mobile
-Live app (the real client, in a browser): {{LIVE_APP}}
-Demo video: {{VIDEO}}
+Live app (the real client, in a browser): https://n5qi7wnkhcwnd.space.minimax.io
+Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
 
 Four packages:
 
@@ -106,7 +116,7 @@ One of them rebuilt the pre-fix code in a sandbox to prove it; another transpile
 store and drove it through eight frame orderings. Both found things I had read past.
 
 All of it was built with M3.1 Flash in MiniMax Code. The full story, including the limits I
-did not fix, is here: {{REPO}}/blob/main/docs/CREATION-NOTE.md
+did not fix, is here: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
 
 181 tests pass across the four packages, and the end-to-end run is against a live team — real
 pairing code, real streamed reply, real dispatched task, real memory entries.
@@ -138,9 +148,9 @@ Then I had three independent reviewers read the code with fresh eyes. They found
 defects that would have shipped — including a regression test that passed against the very
 code it was meant to catch.
 
-Live app: {{LIVE_APP}}
-Source: {{REPO}}
-Demo video: {{VIDEO}}
+Live app: https://n5qi7wnkhcwnd.space.minimax.io
+Source: https://github.com/nattiini45/minimax-bot-mobile
+Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
 ```
 
 ---
