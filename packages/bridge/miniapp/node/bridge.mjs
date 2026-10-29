@@ -18,6 +18,27 @@ const OP_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const HISTORY_LIMIT = 200;
 
 /**
+ * How much state a client can make the bridge hold.
+ *
+ * Every map below is keyed by something a client chose: a chat id, a message id, an
+ * operation id. A client that keeps inventing new ones makes the desktop's memory grow
+ * without bound, and the desktop is the one that pays for it. Each of these is a ceiling
+ * on how many keys are kept at once; the oldest entry is dropped when the ceiling is
+ * reached, so the state that survives is the state that was used most recently.
+ */
+const MAX_TRACKED_CHATS = 50;
+const MAX_REACTION_MESSAGES = 500;
+const MAX_OP_CACHE_ENTRIES = 500;
+
+/**
+ * The longest emoji a reaction may carry, in code points.
+ *
+ * The emoji is stored verbatim and broadcast to every device in the room, so a client
+ * that sends a megabyte of text as an "emoji" would put it on every phone.
+ */
+const MAX_REACTION_EMOJI_LENGTH = 32;
+
+/**
  * Maps one Bot from the team tool's shape to the protocol's shape.
  *
  * The team tool reports `bot_id` and `main`; the protocol the phone speaks uses
@@ -537,6 +558,15 @@ export class Bridge {
     for (const [key, entry] of this.opCache) {
       if (entry.expiresAt <= now) this.opCache.delete(key);
     }
+    // The cache key is built from an operation id the client chose, so the time to live
+    // alone does not bound it: a client that sends a hundred thousand distinct
+    // operations inside one window keeps a hundred thousand entries. The oldest goes
+    // first, and an operation that is repeated after it was dropped is simply run again.
+    while (this.opCache.size > MAX_OP_CACHE_ENTRIES) {
+      const oldest = this.opCache.keys().next();
+      if (oldest.done) break;
+      this.opCache.delete(oldest.value);
+    }
   }
 
   // -- dispatch ------------------------------------------------------------
@@ -816,9 +846,22 @@ export class Bridge {
     if (!messageId || !emoji) {
       throw codedError('INVALID_ARGUMENTS', 'messageId and emoji are required.');
     }
+    if ([...String(emoji)].length > MAX_REACTION_EMOJI_LENGTH) {
+      throw codedError(
+        'INVALID_ARGUMENTS',
+        `An emoji may be at most ${MAX_REACTION_EMOJI_LENGTH} characters long.`,
+      );
+    }
     const bucket = this.reactions.get(messageId) ?? new Map();
     bucket.set(emoji, (bucket.get(emoji) ?? 0) + 1);
     this.reactions.set(messageId, bucket);
+    // A client that reacts to a million different messages would otherwise make the
+    // desktop hold a million buckets. The oldest reaction is the one that goes.
+    while (this.reactions.size > MAX_REACTION_MESSAGES) {
+      const oldest = this.reactions.keys().next();
+      if (oldest.done) break;
+      this.reactions.delete(oldest.value);
+    }
     const reaction = { messageId, emoji };
     this.emit('evt.reaction_added', { reaction });
     return { reaction };
@@ -859,6 +902,14 @@ export class Bridge {
     list.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
     if (list.length > HISTORY_LIMIT) list.splice(0, list.length - HISTORY_LIMIT);
     this.history.set(chatId, list);
+    // The chat id is chosen by the client, so the number of chats the desktop keeps a
+    // history for is a ceiling and not a promise. The least recently used chat goes
+    // first: it is the one whose history is least likely to be asked for again.
+    while (this.history.size > MAX_TRACKED_CHATS) {
+      const oldest = this.history.keys().next();
+      if (oldest.done) break;
+      this.history.delete(oldest.value);
+    }
   }
 
   onTurnFinished({ chatId, durationMs, result }) {
