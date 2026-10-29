@@ -57,6 +57,13 @@ export class RelayClient {
   private opened = false;
   /** True when the last handshake failed because the credential was refused. */
   private refused = false;
+  /**
+   * Whether a ticket was refused and the token was used instead.
+   *
+   * A relay whose room predates the ticket does not know what one is, so the
+   * connection is tried once more with the token.
+   */
+  private usedTokenFallback = false;
 
   constructor(options: RelayClientOptions) {
     this.options = options;
@@ -121,7 +128,15 @@ export class RelayClient {
   private async open(): Promise<void> {
     const ticket = await this.fetchTicket();
     if (this.closed) return;
+    this.openSocket(ticket);
+  }
 
+  /**
+   * Opens the socket, with a ticket for the connection when there is one.
+   *
+   * @param ticket The ticket, or null to use the token.
+   */
+  private openSocket(ticket: string | null): void {
     const socket = new WebSocket(this.endpoint(ticket));
     this.socket = socket;
 
@@ -156,6 +171,14 @@ export class RelayClient {
       this.socket = null;
       this.setStatus('offline');
       if (this.closed) return;
+      // A connection that was refused before it opened, and that carried a
+      // ticket, is tried once more with the token: a relay whose room predates
+      // the ticket does not know what one is.
+      if (!this.opened && ticket && !this.usedTokenFallback) {
+        this.usedTokenFallback = true;
+        this.openSocket(null);
+        return;
+      }
       // A revoked or replaced device must stop trying: reconnecting forever with a
       // credential the relay has already rejected is a loop the user cannot see.
       if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_DEVICE_REVOKED) {
