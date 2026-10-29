@@ -306,10 +306,11 @@
       /**
        * The bridge's per-process secret.
        *
-       * It proves a mutating request came from this surface: a page in the user's
-       * browser can reach the bridge over loopback, but it cannot read this
-       * response (the bridge sends no CORS headers), so it can never obtain the
-       * secret and can never redirect the bridge at a relay of its own.
+       * It proves a request came from this surface. A page in the user's browser
+       * can reach the bridge over loopback, but the bridge only answers a caller
+       * whose own headers show it is this surface, so a hostile page never gets
+       * this response, never obtains the secret, and can never redirect the
+       * bridge at a relay of its own.
        */
       let secret = null;
 
