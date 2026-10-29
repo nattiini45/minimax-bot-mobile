@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 
 import { Bridge } from './bridge.mjs';
-import { loadConfig, saveConfig } from './config.mjs';
+import { isAllowedRelayUrl, loadConfig, relayOrigin, saveConfig } from './config.mjs';
 
 const MAX_BODY = 256 * 1024;
 
@@ -70,7 +70,18 @@ export async function start(context) {
   };
 }
 
-async function handle(request, response, deps) {
+/**
+ * Handles one request.
+ *
+ * Exported so the surface can be tested without a socket: the routes that matter
+ * here are the ones that decide whether a request may change the bridge's
+ * configuration.
+ *
+ * @param {import('node:http').IncomingMessage} request
+ * @param {import('node:http').ServerResponse} response
+ * @param {any} deps
+ */
+export async function handle(request, response, deps) {
   const url = new URL(request.url, 'http://127.0.0.1');
   const path = url.pathname;
 
@@ -156,10 +167,46 @@ async function handle(request, response, deps) {
     }
     const { getConfig, setConfig } = deps;
     const current = getConfig();
+
+    const nextRelayUrl =
+      typeof body.relayUrl === 'string' && body.relayUrl.length > 0
+        ? body.relayUrl
+        : current.relayUrl;
+    if (!isAllowedRelayUrl(nextRelayUrl)) {
+      return json(response, 400, {
+        error: 'bad_request',
+        message: 'That relay address is not one the bridge may use.',
+      });
+    }
+
+    const nextAccountId =
+      typeof body.accountId === 'string' && body.accountId.length > 0
+        ? body.accountId
+        : current.accountId;
+
+    // The bridge token is the relay's credential for this desktop, and it is minted
+    // for one relay and one account. Pointing the bridge at a different relay — or a
+    // different room — while carrying the current token over would hand that
+    // credential to whoever is on the other end. A change of target therefore needs
+    // a token minted for it.
+    const suppliedToken =
+      typeof body.bridgeToken === 'string' && body.bridgeToken.length > 0
+        ? body.bridgeToken
+        : null;
+    const targetChanged =
+      relayOrigin(nextRelayUrl) !== relayOrigin(current.relayUrl) ||
+      nextAccountId !== current.accountId;
+    if (targetChanged && !suppliedToken) {
+      return json(response, 400, {
+        error: 'bad_request',
+        message: 'A different relay or account needs a token minted for it.',
+      });
+    }
+
     const next = {
       ...current,
-      relayUrl: typeof body.relayUrl === 'string' ? body.relayUrl : current.relayUrl,
-      accountId: typeof body.accountId === 'string' ? body.accountId : current.accountId,
+      relayUrl: nextRelayUrl,
+      accountId: nextAccountId,
       bridgeName: typeof body.bridgeName === 'string' ? body.bridgeName : current.bridgeName,
       // The bridge id is the subject of the bridge token, so it has to be pinnable:
       // a token is minted for one specific bridge id, and the desktop must be told
@@ -171,10 +218,7 @@ async function handle(request, response, deps) {
       // The bridge token is the relay's credential for this desktop. It is minted by
       // whoever holds the relay secret and pasted into the surface, so it has to be
       // settable here — but never echoed back, not even to the surface that set it.
-      bridgeToken:
-        typeof body.bridgeToken === 'string' && body.bridgeToken.length > 0
-          ? body.bridgeToken
-          : current.bridgeToken,
+      bridgeToken: suppliedToken ?? current.bridgeToken,
     };
     await setConfig(next);
     return json(response, 200, { ok: true, config: { ...next, bridgeToken: undefined } });

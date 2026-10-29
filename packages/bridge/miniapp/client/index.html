@@ -328,9 +328,14 @@
           const status = await api('/api/status');
           const state = $('relay-state');
           const connected = status.relayConnected;
-          state.innerHTML =
-            '<span class="dot ' + (connected ? 'on' : 'off') + '"></span>' +
-            (connected ? 'connected' : status.relayConfigured ? 'offline' : 'not configured');
+          const dot = document.createElement('span');
+          dot.className = 'dot ' + (connected ? 'on' : 'off');
+          state.replaceChildren(
+            dot,
+            document.createTextNode(
+              connected ? 'connected' : status.relayConfigured ? 'offline' : 'not configured',
+            ),
+          );
           $('relay-hint').textContent = status.relayConfigured
             ? status.relayUrl + '  ·  account ' + status.accountId
             : 'Set the relay URL below to link this desktop to your phone.';
@@ -345,7 +350,9 @@
           $('relay-hint').textContent += '  ·  bridge ' + (status.bridgeId || '?');
           $('relay-hint').textContent += '  ·  ' + team;
         } catch (error) {
-          $('relay-state').innerHTML = '<span class="dot off"></span>unavailable';
+          const off = document.createElement('span');
+          off.className = 'dot off';
+          $('relay-state').replaceChildren(off, document.createTextNode('unavailable'));
           $('relay-hint').textContent = error.message;
         }
       }
@@ -354,7 +361,7 @@
         try {
           const result = await api('/api/devices');
           const list = $('devices');
-          list.innerHTML = '';
+          list.replaceChildren();
           if (!result.devices.length) {
             const empty = document.createElement('li');
             empty.className = 'muted';
@@ -365,9 +372,16 @@
           for (const device of result.devices) {
             const item = document.createElement('li');
             const name = document.createElement('div');
-            name.innerHTML =
-              '<div>' + (device.deviceName || device.deviceId) + '</div>' +
-              '<div class="muted">' + device.clientVersion + '</div>';
+            // The device name is whatever the phone typed when it paired, so it is
+            // built as text. Assigning it as markup would run it as script in this
+            // surface's own origin, where the bridge token lives.
+            const nameLine = document.createElement('div');
+            nameLine.textContent = device.deviceName || device.deviceId;
+            const versionLine = document.createElement('div');
+            versionLine.className = 'muted';
+            versionLine.textContent = device.clientVersion;
+            name.appendChild(nameLine);
+            name.appendChild(versionLine);
             const right = document.createElement('div');
             if (device.revoked) {
               const pill = document.createElement('span');
@@ -389,7 +403,11 @@
             list.appendChild(item);
           }
         } catch (error) {
-          $('devices').innerHTML = '<li class="muted">' + error.message + '</li>';
+          // The message is text, never markup.
+          const failed = document.createElement('li');
+          failed.className = 'muted';
+          failed.textContent = error.message;
+          $('devices').replaceChildren(failed);
         }
       }
 
