@@ -27,6 +27,15 @@ const TOKEN_KEY = 'minimax-bot.device-token';
 /** The key the relay the token was minted for is filed under. */
 const ORIGIN_KEY = 'minimax-bot.device-origin';
 
+/**
+ * The key the relay this phone was last paired with is filed under.
+ *
+ * It is a host name and not a secret, so it goes in the plain store. It is not cleared
+ * with the token: a phone that was unpaired still knows which relay it belongs to, and
+ * a pairing code is not sent to a different one without the user saying so.
+ */
+const LAST_RELAY_KEY = 'minimax-bot.last-relay';
+
 /** Whether this build has a keystore the app sandbox cannot read. */
 let keystoreAvailable: boolean | undefined;
 
@@ -138,5 +147,31 @@ export async function clearDeviceToken(): Promise<void> {
     await AsyncStorage.removeItem(ORIGIN_KEY);
   } catch {
     // nothing to do
+  }
+}
+
+/**
+ * Remembers the relay this phone was last paired with.
+ *
+ * @param {string} url the relay address the pairing code was sent to
+ */
+export async function saveLastRelayUrl(url: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LAST_RELAY_KEY, url);
+  } catch {
+    // the store is full or unavailable; the pairing itself still works
+  }
+}
+
+/**
+ * The relay this phone was last paired with.
+ *
+ * @returns {Promise<string | null>}
+ */
+export async function loadLastRelayUrl(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(LAST_RELAY_KEY);
+  } catch {
+    return null;
   }
 }

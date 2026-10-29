@@ -18,6 +18,7 @@ import {
   loadDeviceOrigin,
   loadDeviceToken,
   saveDeviceToken,
+  saveLastRelayUrl,
 } from './credential-store';
 
 export interface Session {
@@ -384,6 +385,10 @@ export async function persistSession(session: Session | null) {
   const { deviceToken, ...rest } = session;
   await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(rest));
   await saveDeviceToken(deviceToken, relayOrigin(session.relayUrl));
+  // The relay this phone belongs to is remembered outside the session, so that a
+  // pairing code is not sent to another relay without the user saying so - even
+  // after this phone was unpaired.
+  await saveLastRelayUrl(session.relayUrl);
 }
 
 /**

@@ -1,12 +1,14 @@
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Button } from '../src/components/Button';
 import { Card, SectionHeader } from '../src/components/primitives';
 import { notifySuccess, tapMedium } from '../src/native/haptics';
 import { pairWithCode } from '../src/net/pairing';
-import { isValidRelayUrl } from '../src/net/relay-url';
+import { resolvePairingTarget, untrustedRelayWarning } from '../src/net/pairing-target';
+import { isValidRelayUrl, relayOrigin } from '../src/net/relay-url';
+import { loadLastRelayUrl } from '../src/state/credential-store';
 import { useTheme } from '../src/theme';
 import { connectRelay, useAppStore } from '../src/state/store';
 
@@ -36,6 +38,46 @@ export default function PairScreen() {
   const [code, setCode] = useState('');
   const [error, setErrorState] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The relay this phone was last paired with, when it has paired before. */
+  const [lastRelayUrl, setLastRelayUrl] = useState<string | null>(null);
+  /** The origin the user has acknowledged, for this address only. */
+  const [acknowledged, setAcknowledged] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void loadLastRelayUrl().then((url) => {
+      if (!alive) return;
+      setLastRelayUrl(url);
+      // A build without a fixed address still knows the relay it was last paired with,
+      // so the field starts where the phone was rather than empty.
+      if (!DEFAULT_RELAY_URL && url) setRelayUrl(url);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
+   * The two addresses this phone can compare a destination against: the one this
+   * build was made for, and the one it was last paired with.
+   */
+  const known = useMemo(
+    () => ({
+      buildOrigin: DEFAULT_RELAY_URL ? relayOrigin(DEFAULT_RELAY_URL) : null,
+      lastOrigin: lastRelayUrl ? relayOrigin(lastRelayUrl) : null,
+    }),
+    [lastRelayUrl],
+  );
+
+  const target = useMemo(() => resolvePairingTarget(relayUrl, known), [relayUrl, known]);
+
+  /**
+   * Whether the code still needs to be acknowledged.
+   *
+   * The acknowledgement is for one address: changing the address takes it away, so a
+   * confirmation for one relay never carries over to another.
+   */
+  const needsAcknowledgement = target.origin !== '' && !target.known && acknowledged !== target.origin;
 
   const pair = async () => {
     setBusy(true);
@@ -44,6 +86,10 @@ export default function PairScreen() {
       if (!isValidRelayUrl(relayUrl)) {
         setErrorState('Enter the relay address, for example https://relay.example.workers.dev');
         setError('The relay address is not a valid URL.');
+        return;
+      }
+      if (needsAcknowledgement) {
+        setErrorState(untrustedRelayWarning(target));
         return;
       }
       const deviceId = `phone_${Math.random().toString(36).slice(2, 12)}`;
@@ -62,6 +108,8 @@ export default function PairScreen() {
         deviceId,
         deviceName: 'Phone',
         clientVersion: '0.1.0',
+        known,
+        confirmed: acknowledged !== null && acknowledged === target.origin,
       });
 
       if (!result.ok || !result.deviceToken) {
@@ -100,7 +148,11 @@ export default function PairScreen() {
         </Text>
         <TextInput
           value={relayUrl}
-          onChangeText={setRelayUrl}
+          onChangeText={(value) => {
+            setRelayUrl(value);
+            // The acknowledgement is for one address, so it does not follow the field.
+            setAcknowledged(null);
+          }}
           placeholder="https://relay.example.workers.dev"
           placeholderTextColor={theme.colors.subtle}
           autoCapitalize="none"
@@ -117,6 +169,27 @@ export default function PairScreen() {
           ]}
           accessibilityLabel="Relay URL"
         />
+        {target.origin ? (
+          <Text style={[styles.hint, { color: theme.colors.muted }]}>
+            The code is sent to {target.origin}.
+          </Text>
+        ) : null}
+        {needsAcknowledgement ? (
+          <View style={[styles.warning, { borderColor: theme.colors.warning }]}>
+            <Text style={[styles.warningTitle, { color: theme.colors.warning }]}>A different relay</Text>
+            <Text style={[styles.warningBody, { color: theme.colors.muted }]}>
+              {untrustedRelayWarning(target)}
+            </Text>
+            <Button
+              label={`Send the code to ${target.origin} anyway`}
+              variant="secondary"
+              onPress={() => {
+                tapMedium();
+                setAcknowledged(target.origin);
+              }}
+            />
+          </View>
+        ) : null}
         <Text style={[styles.hint, { color: theme.colors.muted }]}>
           The account id names the room your desktop and this phone share. The MiniMax Bot Bridge
           window shows it, next to the relay address.
@@ -173,7 +246,7 @@ export default function PairScreen() {
             label="Pair"
             variant="primary"
             busy={busy}
-            disabled={!relayUrl.trim() || code.trim().length !== 6}
+            disabled={!relayUrl.trim() || code.trim().length !== 6 || needsAcknowledgement}
             onPress={() => {
               tapMedium();
               void pair();
@@ -218,6 +291,21 @@ const styles = StyleSheet.create({
   error: {
     fontSize: 13,
     marginTop: 8,
+  },
+  warning: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    gap: 8,
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  warningBody: {
+    fontSize: 13,
+    lineHeight: 19,
   },
   actions: {
     flexDirection: 'row',
