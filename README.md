@@ -142,8 +142,11 @@ Point the bridge at the deployed worker, mint a bridge token for it, and give
 the phone the worker address:
 
 ```bash
-npm run mint:token -- --secret <RELAY_SECRET> --bridge-id <id> --bridge-name <name>
+RELAY_SECRET=<RELAY_SECRET> npm run mint:token -- --bridge-id <id> --bridge-name <name>
 ```
+
+The secret comes from the environment (or from `--secret-file <path>`), never from
+the command line: an argument lands in the shell history and in the process table.
 
 The client can ship with the relay address already filled in. Expo inlines
 `EXPO_PUBLIC_RELAY_URL` at build time, and the field stays editable, so a
@@ -164,7 +167,7 @@ The bridge needs a **bridge token** to claim an account on the relay. Mint one
 against the relay's secret:
 
 ```bash
-npm run mint:token -- --secret <RELAY_SECRET> --bridge-id bridge_1 --bridge-name MyDesktop --days 30
+RELAY_SECRET=<RELAY_SECRET> npm run mint:token -- --bridge-id bridge_1 --bridge-name MyDesktop --days 30
 ```
 
 It prints the token, its expiry and the configuration block to paste into the
