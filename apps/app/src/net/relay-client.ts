@@ -52,6 +52,14 @@ export class RelayClient {
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq = 0;
+  /** Whether the relay said it could not replay everything this phone missed. */
+  private replayWasIncomplete = false;
+  /** Whether the relay's hello has been seen, so the two counters can be compared. */
+  private resumeSettled = false;
+  /** Whether the desktop was attached to the room, as the last hello said. */
+  private bridgeOnline = false;
+  /** How many times this phone has had to rebuild its view. */
+  private resyncCounter = 0;
   private options: RelayClientOptions;
   /** True once a socket has completed its handshake. */
   private opened = false;
@@ -210,11 +218,29 @@ export class RelayClient {
    * above the relay's counter silently drops every frame the relay sends next:
    * their numbers are all below its cursor, so they are discarded without a word
    * and the conversation simply stops arriving.
+   *
+   * The other direction matters too. The relay hands out its numbers one at a
+   * time, so a number that is more than one above the cursor means frames were
+   * lost between the relay and this phone. They cannot be got back — the relay's
+   * replay buffer only covers the frames around its own counter — so the phone's
+   * view has a hole in it and has to be rebuilt rather than carry on across the
+   * gap.
    */
   private applyFrame(frame: Frame): void {
     if (frame.type === 'hello.ok') {
       this.attempt = 0;
-      const payload = frame.payload as { seq?: number; truncated?: boolean } | undefined;
+      const payload = frame.payload as
+        | { seq?: number; truncated?: boolean; bridgeOnline?: boolean }
+        | undefined;
+      this.bridgeOnline = payload?.bridgeOnline === true;
+      // The relay says whether it could replay everything this phone missed. If
+      // it could not, the first frame after the hello may jump, and that jump is
+      // the one the relay already told the phone about.
+      this.replayWasIncomplete = payload?.truncated === true;
+      // Until the hello has been seen, the phone's cursor and the relay's
+      // counter say nothing about each other, so a jump between them means
+      // nothing and is not a loss.
+      this.resumeSettled = true;
       const relaySeq = payload?.seq;
       if (typeof relaySeq === 'number' && relaySeq < this.lastSeq) {
         this.lastSeq = relaySeq;
@@ -225,9 +251,37 @@ export class RelayClient {
     // A frame the relay has already sequenced is one the app has already applied.
     if (typeof frame.seq === 'number') {
       if (frame.seq <= this.lastSeq) return;
+      if (frame.seq > this.lastSeq + 1 && this.resumeSettled && !this.replayWasIncomplete) {
+        // The relay's numbers jumped, so frames were lost on the way here. The
+        // phone cannot get them back, so it rebuilds its view instead of
+        // carrying on with a hole in the conversation.
+        this.resync(frame.seq);
+      }
+      this.replayWasIncomplete = false;
       this.lastSeq = frame.seq;
     }
     this.options.onFrame?.(frame);
+  }
+
+  /**
+   * Asks the app to rebuild its view.
+   *
+   * The hello is the frame that carries "your view has a hole", so the one the
+   * relay sends is sent again with that flag set: the app already knows what to
+   * do with it.
+   *
+   * @param relaySeq the number the relay has reached, as the hello carries it.
+   */
+  private resync(relaySeq: number): void {
+    this.resyncCounter += 1;
+    this.options.onFrame?.({
+      v: 1,
+      id: `resync_${this.resyncCounter}`,
+      ts: Date.now(),
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: relaySeq, bridgeOnline: this.bridgeOnline, truncated: true },
+    });
   }
 
   disconnect(): void {

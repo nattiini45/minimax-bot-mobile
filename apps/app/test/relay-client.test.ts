@@ -231,4 +231,103 @@ describe('a relay whose counter was rewound', () => {
     const hello = frames.find((frame) => frame.type === 'hello.ok');
     expect((hello?.payload as { truncated?: boolean }).truncated).toBe(false);
   });
+
+  it('rebuilds its view when the relay skips a number', async () => {
+    const frames: Frame[] = [];
+    const phone = new RelayClient({
+      url: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      deviceId: 'device-1',
+      token: 'the-device-token',
+      clientVersion: '0.1.0',
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    phone.connect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const socket = sockets[0]!;
+
+    // The relay says it could replay everything, so the phone's cursor and the
+    // relay's counter agree - and it replays the frames the phone missed.
+    socket.deliver({
+      v: 1,
+      id: 'h1',
+      ts: 1,
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: 2, bridgeOnline: true, truncated: false },
+    });
+    for (const seq of [1, 2]) {
+      socket.deliver({
+        v: 1,
+        id: `f${seq}`,
+        ts: seq + 1,
+        type: 'evt.message_chunk',
+        source: 'relay',
+        payload: {},
+        seq,
+      });
+    }
+
+    // Then the relay's numbers jump: frame 4 never arrives. The phone cannot
+    // get it back - the relay's replay buffer only covers the frames around its
+    // own counter - so it rebuilds its view rather than carry on with a hole.
+    socket.deliver({
+      v: 1,
+      id: 'f5',
+      ts: 9,
+      type: 'evt.message_chunk',
+      source: 'relay',
+      payload: {},
+      seq: 5,
+    });
+
+    const hellos = frames.filter((frame) => frame.type === 'hello.ok');
+    expect(hellos.map((f) => JSON.stringify(f.payload))).toEqual([
+      '{"seq":2,"bridgeOnline":true,"truncated":false}',
+      '{"seq":5,"bridgeOnline":true,"truncated":true}',
+    ]);
+    expect(phone.resumePoint).toBe(5);
+  });
+
+  it('does not rebuild its view when the relay said it could not replay', async () => {
+    const frames: Frame[] = [];
+    const phone = new RelayClient({
+      url: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      deviceId: 'device-1',
+      token: 'the-device-token',
+      clientVersion: '0.1.0',
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    phone.connect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const socket = sockets[0]!;
+
+    // The relay could not replay everything the phone missed, so the first
+    // frame after the hello jumps - and that jump is the one the relay already
+    // told the phone about.
+    socket.deliver({
+      v: 1,
+      id: 'h1',
+      ts: 1,
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: 40, bridgeOnline: true, truncated: true },
+    });
+    socket.deliver({
+      v: 1,
+      id: 'f1',
+      ts: 2,
+      type: 'evt.message_chunk',
+      source: 'relay',
+      payload: {},
+      seq: 41,
+    });
+
+    const hellos = frames.filter((frame) => frame.type === 'hello.ok');
+    expect(hellos.length).toBe(1);
+    expect(phone.resumePoint).toBe(41);
+  });
 });
