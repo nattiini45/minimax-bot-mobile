@@ -43,8 +43,8 @@ test('a rotated bridge token is written down', async () => {
     // written, so the token on disk is still the one that works.
     await assert.rejects(() => bridge.rotateToken());
 
-    const onDisk = JSON.parse(await readFile(join(dataDir, 'bridge-config.json'), 'utf8'));
-    assert.equal(onDisk.bridgeToken, 'the-old-token');
+    const onDisk = await readFile(join(dataDir, 'bridge-token'), 'utf8');
+    assert.equal(onDisk.trim(), 'the-old-token');
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }
@@ -78,8 +78,8 @@ test('a rotation that succeeds replaces the token on disk', async () => {
     // The token has to be on disk as well: the bridge can rotate while it starts,
     // before anything else has had a chance to listen, and a rotation that was
     // not written down would leave the desktop holding a revoked token.
-    const stored = JSON.parse(await readFile(join(dataDir, 'bridge-config.json'), 'utf8'));
-    assert.equal(stored.bridgeToken, 'the-new-token');
+    const stored = await readFile(join(dataDir, 'bridge-token'), 'utf8');
+    assert.equal(stored.trim(), 'the-new-token');
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }

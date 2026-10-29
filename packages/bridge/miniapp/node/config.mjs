@@ -1,7 +1,19 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { writePrivateFile } from './private-file.mjs';
+
 const CONFIG_FILE = 'bridge-config.json';
+
+/**
+ * The file the bridge token lives in.
+ *
+ * The token is a credential for the account's room and it is not revocable on
+ * its own, so it does not share a file with the relay address: a file that is
+ * copied around - into a backup, into a support bundle - carries the address
+ * and not the credential.
+ */
+const TOKEN_FILE = 'bridge-token';
 
 /**
  * @typedef {object} BridgeConfig
@@ -33,11 +45,29 @@ export async function loadConfig(dataDir, overrides = {}) {
     stored = {};
   }
 
+  // The token used to share the configuration file. It has a file of its own now,
+  // written for its owner only, and a configuration that still carries it is
+  // moved.
+  const legacyToken = typeof stored.bridgeToken === 'string' ? stored.bridgeToken : '';
+  delete stored.bridgeToken;
+
+  let fileToken = '';
+  try {
+    fileToken = (await readFile(join(dataDir, TOKEN_FILE), 'utf8')).trim();
+  } catch {
+    fileToken = '';
+  }
+  const movedToken = !fileToken && Boolean(legacyToken);
+  if (movedToken) {
+    fileToken = legacyToken;
+    await writePrivateFile(join(dataDir, TOKEN_FILE), fileToken);
+  }
+
   const config = {
     relayUrl: overrides.relayUrl ?? stored.relayUrl ?? '',
     accountId: overrides.accountId ?? stored.accountId ?? 'default',
     bridgeId: overrides.bridgeId ?? stored.bridgeId ?? '',
-    bridgeToken: overrides.bridgeToken ?? stored.bridgeToken ?? '',
+    bridgeToken: overrides.bridgeToken ?? fileToken,
     bridgeName: overrides.bridgeName ?? stored.bridgeName ?? 'Desktop',
   };
 
@@ -52,6 +82,9 @@ export async function loadConfig(dataDir, overrides = {}) {
   if (!config.bridgeId) {
     config.bridgeId = `bridge_${randomId()}`;
     await saveConfig(dataDir, config);
+  } else if (movedToken) {
+    // The configuration that still carried the token is written back without it.
+    await saveConfig(dataDir, config);
   }
 
   return config;
@@ -64,7 +97,11 @@ export async function loadConfig(dataDir, overrides = {}) {
  */
 export async function saveConfig(dataDir, config) {
   await mkdir(dataDir, { recursive: true });
-  await writeFile(join(dataDir, CONFIG_FILE), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  const { bridgeToken, ...rest } = config;
+  await writePrivateFile(join(dataDir, CONFIG_FILE), `${JSON.stringify(rest, null, 2)}\n`);
+  if (bridgeToken) {
+    await writePrivateFile(join(dataDir, TOKEN_FILE), bridgeToken);
+  }
 }
 
 /**

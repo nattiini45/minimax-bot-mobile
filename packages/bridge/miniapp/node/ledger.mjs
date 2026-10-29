@@ -6,8 +6,10 @@
  * same numbers from the calls it makes and the turns it runs.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { writePrivateFile } from './private-file.mjs';
 
 const LEDGER_FILE = 'ledger.json';
 const MAX_ENTRIES = 5000;
@@ -51,10 +53,10 @@ export class Ledger {
 
   async persist() {
     await mkdir(this.dataDir, { recursive: true });
-    await writeFile(
+    // The ledger holds the conversation, so it is written for its owner only.
+    await writePrivateFile(
       join(this.dataDir, LEDGER_FILE),
       `${JSON.stringify({ entries: this.entries, batchIds: this.batchIds }, null, 2)}\n`,
-      'utf8',
     );
   }
 
