@@ -48,6 +48,12 @@
           "color": "#0a0a0a"
         }
       ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
       "./plugins/with-local-relay-network.cjs",
       "./plugins/with-workspace-bundle-inputs.cjs"
     ],

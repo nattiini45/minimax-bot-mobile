@@ -46,6 +46,19 @@ export function relayWsUrl(url: string): string {
 }
 
 /**
+ * The origin of a relay address, in its HTTP form.
+ *
+ * Two addresses that name one relay have one origin, so an address can be
+ * compared with the origin a credential was minted for.
+ */
+export function relayOrigin(url: string): string {
+  const http = relayHttpUrl(url).trim().replace(/\/+$/, '');
+  const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/\s]+)/i.exec(http);
+  if (!match) return '';
+  return `${match[1]!.toLowerCase()}//${match[2]!.toLowerCase()}`;
+}
+
+/**
  * The hosts a cleartext relay may live on.
  *
  * A relay on the loopback interface is on this phone's own machine — the
