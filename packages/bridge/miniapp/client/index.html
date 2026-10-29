@@ -257,6 +257,7 @@
     <section class="card">
       <div class="label">Pairing code</div>
       <div class="code empty" id="code">Generate a code to pair a phone.</div>
+      <div class="hint" id="pair-target"></div>
       <div class="row" style="margin-top: 14px">
         <button type="button" id="new-code">New code</button>
         <span class="muted" id="code-timer"></span>
@@ -349,6 +350,12 @@
             : diagnostics.reason || 'The @minimax-bot team is not running.';
           $('relay-hint').textContent += '  ·  bridge ' + (status.bridgeId || '?');
           $('relay-hint').textContent += '  ·  ' + team;
+
+          // The phone needs the relay address and the account id as well as the
+          // code, so they are shown where the code is.
+          $('pair-target').textContent = status.relayConfigured
+            ? 'On the phone: relay ' + status.relayUrl + ', account ' + status.accountId
+            : 'Set the relay address first.';
         } catch (error) {
           const off = document.createElement('span');
           off.className = 'dot off';
