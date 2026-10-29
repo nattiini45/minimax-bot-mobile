@@ -262,6 +262,10 @@
         <button type="button" id="new-code">New code</button>
         <span class="muted" id="code-timer"></span>
       </div>
+      <div class="row" style="margin-top: 10px">
+        <button type="button" id="rotate-token">Rotate token</button>
+        <span class="muted">Replaces the bridge token and kills the old one.</span>
+      </div>
       <div class="error" id="pair-error"></div>
     </section>
 
@@ -447,6 +451,19 @@
       }
 
       $('new-code').addEventListener('click', newCode);
+      $('rotate-token').addEventListener('click', async () => {
+        $('pair-error').textContent = '';
+        const button = $('rotate-token');
+        button.disabled = true;
+        try {
+          await api('/api/rotate-token', { method: 'POST', body: '{}' });
+          $('code-timer').textContent = 'the token was replaced; the old one no longer works';
+        } catch (error) {
+          $('pair-error').textContent = error.message;
+        } finally {
+          button.disabled = false;
+        }
+      });
       $('save-config').addEventListener('click', async () => {
         try {
           const payload = {

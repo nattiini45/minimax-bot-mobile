@@ -8,7 +8,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 
-import { newId } from '@minimax-bot/protocol';
+import { newId, type TokenPayload } from '@minimax-bot/protocol';
 
 import { accountIdFromPath } from './account-path.js';
 import { RelaySession, type PeerSocket, type SocketLike } from './session.js';
@@ -37,13 +37,44 @@ export class Relay extends DurableObject<RelayEnv> {
 
   constructor(ctx: DurableObjectState, env: RelayEnv) {
     super(ctx, env);
-    this.session = new RelaySession({ secret: env.RELAY_SECRET });
+    this.session = new RelaySession({ secret: env.RELAY_SECRET, storage: ctx.storage });
   }
 
   // -- RPC surface used by the Worker --------------------------------------
 
   createPairingCode(bridgeId: string, bridgeName: string): { code: string; expiresAt: number } {
     return this.session.createPairingCode(bridgeId, bridgeName);
+  }
+
+  /**
+   * Issues a fresh bridge token for this account and kills every older one.
+   */
+  async rotateBridgeToken(
+    bridgeId: string,
+    accountId: string,
+  ): Promise<{ token: string; expiresAt: number }> {
+    return this.session.rotateBridgeToken(bridgeId, accountId);
+  }
+
+  /**
+   * Kills every bridge token issued at or before `instant`.
+   */
+  revokeBridgeTokensBefore(instant: number): Promise<void> {
+    return this.session.revokeBridgeTokensBefore(instant);
+  }
+
+  /**
+   * The instant before which every bridge token is dead, or null.
+   */
+  bridgeTokenCutoff(): Promise<number | null> {
+    return this.session.bridgeTokenCutoff();
+  }
+
+  /**
+   * Whether a bridge token has been revoked.
+   */
+  isBridgeTokenRevoked(payload: TokenPayload | null): Promise<boolean> {
+    return this.session.isBridgeTokenRevoked(payload);
   }
 
   async pairDevice(

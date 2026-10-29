@@ -230,3 +230,20 @@ describe('client chosen message ids', () => {
     expect(isValidClientMessageId(42)).toBe(false);
   });
 });
+
+describe('the issue time on a token', () => {
+  const SECRET = 'protocol-issue-time-secret';
+
+  it('records when the token was issued', async () => {
+    const before = Date.now();
+    const { token } = await issueToken('bridge-1', 'bridge', 60_000, SECRET, {
+      accountId: 'acct-1',
+    });
+    const payload = await verifyToken(token, SECRET);
+
+    // The revocation cutoff works on this: a relay can say "every bridge token
+    // issued before now is dead" without having seen the tokens it kills.
+    expect(payload?.iat).toBeGreaterThanOrEqual(before);
+    expect(payload?.iat).toBeLessThanOrEqual(Date.now());
+  });
+});

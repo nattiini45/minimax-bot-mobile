@@ -8,7 +8,7 @@
  * cannot even ask the relay for a pairing code.
  *
  * Usage:
- *   node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--days 30]
+ *   node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--hours 24]
  *
  * The relay secret is read from the environment (RELAY_SECRET) or from the file
  * named by --secret-file. Passing it with --secret still works, but a command-line
@@ -18,6 +18,11 @@
  * The account is the room the token can reach. It is baked into the signed token,
  * so the relay refuses the token against any other account.
  *
+ * The token is short-lived on purpose: a bridge token lives on a disk, and a short
+ * life is what keeps a leaked one from being a month-long problem. The bridge
+ * replaces its own token before this one runs out, and replacing it kills the old
+ * one.
+ *
  * It prints the bridge configuration to paste into the bridge, and the token on its
  * own line so it can be piped.
  */
@@ -26,7 +31,7 @@ import { readFileSync } from 'node:fs';
 
 import { issueToken } from '@minimax-bot/protocol';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 function parseArgs(argv) {
   const options = {
@@ -35,7 +40,7 @@ function parseArgs(argv) {
     bridgeId: '',
     bridgeName: 'Desktop',
     accountId: 'default',
-    days: 30,
+    hours: 24,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -60,8 +65,12 @@ function parseArgs(argv) {
       case '--account':
         options.accountId = value;
         break;
+      case '--hours':
+        options.hours = Number(value);
+        break;
       case '--days':
-        options.days = Number(value);
+        // Kept for the scripts that grew up with it; days are just hours.
+        options.hours = Number(value) * 24;
         break;
       default:
         throw new Error(`Unknown option ${key}.`);
@@ -101,7 +110,7 @@ async function main() {
   } catch (error) {
     console.error(error.message);
     console.error(
-      'Usage: node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--days 30]',
+      'Usage: node scripts/mint-bridge-token.mjs --bridge-id <id> [--account default] [--hours 24]',
     );
     console.error('The secret comes from RELAY_SECRET, or from --secret-file <path>.');
     process.exit(2);
@@ -120,12 +129,12 @@ async function main() {
     console.error('The account id is required: --account <accountId>.');
     process.exit(2);
   }
-  if (!Number.isFinite(options.days) || options.days <= 0) {
-    console.error('The lifetime in days must be a positive number.');
+  if (!Number.isFinite(options.hours) || options.hours <= 0) {
+    console.error('The lifetime in hours must be a positive number.');
     process.exit(2);
   }
 
-  const ttlMs = Math.round(options.days * DAY_MS);
+  const ttlMs = Math.round(options.hours * HOUR_MS);
   const { token, expiresAt } = await issueToken(options.bridgeId, 'bridge', ttlMs, secret, {
     accountId: options.accountId,
   });

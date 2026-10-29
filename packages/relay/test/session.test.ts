@@ -456,6 +456,120 @@ describe('frame routing', () => {
   });
 });
 
+describe('bridge token revocation', () => {
+  /** A storage that keeps what a Durable Object's storage would keep. */
+  function makeStorage() {
+    const data = new Map<string, unknown>();
+    return {
+      data,
+      async get<T>(key: string): Promise<T | undefined> {
+        return data.get(key) as T | undefined;
+      },
+      async put<T>(key: string, value: T): Promise<void> {
+        data.set(key, value);
+      },
+    };
+  }
+
+  async function attach(token: string, accountId = ACCOUNT) {
+    const session = makeSession();
+    const result = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId,
+      token,
+      socket: new FakeSocket(),
+    });
+    return result;
+  }
+
+  it('refuses a bridge token that was revoked', async () => {
+    const session = makeSession();
+    const { token } = await bridgeToken();
+    await session.revokeBridgeTokensBefore(Date.now() + 1_000);
+
+    const result = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token,
+      socket: new FakeSocket(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
+  });
+
+  it('rotating issues a new token and kills the old one', async () => {
+    const session = makeSession();
+    const original = await bridgeToken();
+
+    const rotated = await session.rotateBridgeToken('bridge-1', ACCOUNT);
+    expect(rotated.token).not.toBe(original.token);
+
+    // The old token is dead even though it is signed and unexpired.
+    const old = await session.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token: original.token,
+      socket: new FakeSocket(),
+    });
+    expect(old.ok).toBe(false);
+
+    // The new one works.
+    const fresh = await session.registerSocket({
+      id: 'b2',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token: rotated.token,
+      socket: new FakeSocket(),
+    });
+    expect(fresh.ok).toBe(true);
+  });
+
+  it('keeps a revocation across a restart', async () => {
+    const storage = makeStorage();
+    const before = makeSession({ storage });
+    const { token } = await bridgeToken();
+    await before.revokeBridgeTokensBefore(Date.now() + 1_000);
+
+    // A new session over the same storage is a relay that was redeployed.
+    const after = makeSession({ storage });
+    const result = await after.registerSocket({
+      id: 'b1',
+      role: 'bridge',
+      subject: 'bridge-1',
+      accountId: ACCOUNT,
+      token,
+      socket: new FakeSocket(),
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('never revokes a device token', async () => {
+    const session = makeSession();
+    const paired = await pair(session, 'device-1');
+    await session.revokeBridgeTokensBefore(Date.now() + 1_000);
+
+    const result = await session.registerSocket({
+      id: 'd1',
+      role: 'device',
+      subject: 'device-1',
+      accountId: ACCOUNT,
+      token: paired.deviceToken!,
+      socket: new FakeSocket(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('bridge ownership', () => {
   it('refuses a bridge token that was minted for another account', async () => {
     const session = makeSession();

@@ -112,7 +112,7 @@ export default {
         if (!bridgeId || !token) {
           return relayError('BAD_REQUEST', 'bridgeId and a bearer token are required', 400);
         }
-        const verified = await verifyBridge(token, bridgeId, accountId, env.RELAY_SECRET);
+        const verified = await verifyBridge(token, bridgeId, accountId, stub, env.RELAY_SECRET);
         if (!verified) {
           return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
         }
@@ -144,6 +144,36 @@ export default {
 
       if (rest[0] === 'status' && request.method === 'GET') {
         return json(await stub.status(), 200);
+      }
+
+      // A bridge rotates its own token, or gives it up.
+      //
+      // The bridge token is long-lived and lives on the desktop's disk, so it needs
+      // both a way to be replaced and a way to be killed. Rotating issues a fresh
+      // token and kills every older one; revoking kills all of them and leaves the
+      // bridge with nothing, which is the point of a kill switch.
+      if (rest[0] === 'bridge' && rest[1] === 'token') {
+        const token = bearer(request);
+        const payload = await verifyToken(token, env.RELAY_SECRET);
+        if (!isBridgeTokenForAccount(payload, accountId)) {
+          return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
+        }
+        if (await stub.isBridgeTokenRevoked(payload)) {
+          return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
+        }
+        const owner = await stub.ownerBridgeId();
+        if (owner !== null && owner !== payload.sub) {
+          return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
+        }
+        if (request.method === 'POST') {
+          const rotated = await stub.rotateBridgeToken(payload.sub, accountId);
+          return json({ ok: true, token: rotated.token, expiresAt: rotated.expiresAt }, 200);
+        }
+        if (request.method === 'DELETE') {
+          await stub.revokeBridgeTokensBefore(Date.now());
+          return json({ ok: true, revoked: true }, 200);
+        }
+        return json({ error: 'bad_request', message: 'Expected POST or DELETE.' }, 400);
       }
 
       if (rest[0] === 'devices' && rest[1] && request.method === 'GET') {
@@ -211,10 +241,12 @@ async function verifyBridge(
   token: string,
   bridgeId: string,
   accountId: string,
+  stub: DurableObjectStub<Relay>,
   secret: string,
 ): Promise<boolean> {
   const payload = await verifyToken(token, secret);
   if (!isBridgeTokenForAccount(payload, accountId)) return false;
+  if (await stub.isBridgeTokenRevoked(payload)) return false;
   return payload.sub === bridgeId;
 }
 
@@ -237,6 +269,7 @@ async function authorizeBridge(
   if (!token) return false;
   const payload = await verifyToken(token, secret);
   if (!isBridgeTokenForAccount(payload, accountId)) return false;
+  if (await stub.isBridgeTokenRevoked(payload)) return false;
   const owner = await stub.ownerBridgeId();
   return owner === null || payload.sub === owner;
 }
