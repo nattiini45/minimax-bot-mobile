@@ -9,12 +9,17 @@ public artifact, carries the creation note, and uses `#MiniMaxCode`.
 > | --- | --- |
 > | `LIVE_APP` | https://n5qi7wnkhcwnd.space.minimax.io |
 > | `REPO` | https://github.com/nattiini45/minimax-bot-mobile |
-> | `VIDEO` | https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4 |
+> | `VIDEO` | https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4 |
+> | `APK` | https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk |
+> | `RELEASE` | https://github.com/nattiini45/minimax-bot-mobile/releases/tag/v0.1.0 |
 > | `SCREENSHOTS` | https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png · https://n5qi7wnkhcwnd.space.minimax.io/screenshot-team.png |
 >
 > The live app already points at the deployed relay
 > (`https://minimax-bot-relay.nattiini45.workers.dev`), so a stranger only has to type the
 > six-digit code the desktop shows.
+>
+> The demo video and the Android APK live on the v0.1.0 release, so they survive anything
+> that happens to the site hosting the live client.
 >
 > **Keep every post public** until the winners are announced. Do not delete, edit to hide, or
 > post to a private channel only.
@@ -23,9 +28,9 @@ public artifact, carries the creation note, and uses `#MiniMaxCode`.
 
 | # | Where | What | Size |
 | --- | --- | --- | --- |
-| 1 | Discord → `🧩丨show-your-case` | the block in section 1 | 1 704 characters, one message |
-| 2 | Reddit → one technical subreddit | the title and body in section 2 | 121 + 3 081 characters |
-| 3 | X → one thread | the five posts in section 3 | each under 280 characters |
+| 1 | Discord → `🧩丨show-your-case` | the block in section 1 | 1 857 characters, one message |
+| 2 | Reddit → one technical subreddit | the title and body in section 2 | 121 + 3 234 characters |
+| 3 | X → one thread | the six posts in section 3 | each under 280 characters |
 
 **Order matters.** Post the Discord entry first: it is the one the contest actually collects.
 Post it *before* Nov 3 — ideally by Nov 1, so there is time to fix anything that breaks.
@@ -54,7 +59,8 @@ with MiniMax Code and M3.1 Flash. #MiniMaxCode
 
 Live app (open it, it is the real client): https://n5qi7wnkhcwnd.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
-Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
+Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
+Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
 
 What it is: a Mini App plugin drives the real six-bot team (Chief, Engineer, Reviewer,
 Researcher, Writer, Game Dev) over the real team tools, a Cloudflare Worker carries the frames,
@@ -100,7 +106,8 @@ to that team from your phone.
 
 So I built one: https://github.com/nattiini45/minimax-bot-mobile
 Live app (the real client, in a browser): https://n5qi7wnkhcwnd.space.minimax.io
-Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
+Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
+Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
 
 Four packages:
 
@@ -151,7 +158,7 @@ Questions welcome. Especially about the relay design and the build pipeline.
 
 ## 3. X / Twitter
 
-Post as a thread — five posts, each under X's 280-character limit. Attach the screenshots to
+Post as a thread — six posts, each under X's 280-character limit. Attach the screenshots to
 the first post.
 
 **Post 1/5**
@@ -181,12 +188,18 @@ It also found that my client was throwing away the tool-call events the bridge a
 Then I had three independent reviewers read the code with fresh eyes. They found six more defects that would have shipped — including a regression test that passed against the very code it was meant to catch.
 ```
 
-**Post 5/5**
+**Post 5/6**
 
 ```
-Live app: https://n5qi7wnkhcwnd.space.minimax.io
+Live app (open it, it is the real client): https://n5qi7wnkhcwnd.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
-Demo video: https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4
+```
+
+**Post 6/6**
+
+```
+Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
+Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
 ```
 
 ---

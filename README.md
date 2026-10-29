@@ -13,7 +13,8 @@ native app.
 > [`docs/CREATION-NOTE.md`](docs/CREATION-NOTE.md).
 >
 > **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io> ·
-> [Demo video](https://n5qi7wnkhcwnd.space.minimax.io/demo.mp4) ·
+> [Demo video](https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4) ·
+> [Android APK](https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk) ·
 > [Live tool trace](https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png)
 
 ```
