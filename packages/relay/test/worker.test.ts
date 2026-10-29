@@ -30,6 +30,8 @@ function fakeStub(overrides: Record<string, unknown> = {}) {
     ]),
     revokeDevice: vi.fn(async () => true),
     releaseDevice: vi.fn(async () => true),
+    status: vi.fn(async () => ({ bridgeOnline: true, deviceCount: 1, activeDevices: 1, lastSeq: 7 })),
+    authorizesDevice: vi.fn(async () => true),
     issueTicket: vi.fn(async () => ({ ticket: 'the-ticket', expiresAt: 0 })),
     fetch: vi.fn(async () => new Response(null, { status: 200 })),
     isBridgeTokenRevoked: vi.fn(async () => false),
@@ -118,6 +120,72 @@ describe('a phone releasing its own token', () => {
 
     expect(response.status).toBe(401);
     expect(stub.releaseDevice).not.toHaveBeenCalled();
+  });
+});
+
+describe('the account status', () => {
+  it('is not answered to a stranger', async () => {
+    // The account id is the room's name. A route that answers for any account
+    // is a route that can be used to find out which accounts exist and which of
+    // them are in use - so it is answered only to a credential that belongs to
+    // the account.
+    const stub = fakeStub();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.status).not.toHaveBeenCalled();
+    const body = await response.text();
+    expect(body).not.toContain('bridgeOnline');
+    expect(body).not.toContain('deviceCount');
+  });
+
+  it('is answered to the desktop that owns the account', async () => {
+    const stub = fakeStub();
+    const token = await bridgeToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(200);
+    expect(stub.status).toHaveBeenCalled();
+  });
+
+  it('is answered to a phone that is paired with the account', async () => {
+    const stub = fakeStub();
+    const token = await deviceToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(200);
+    expect(stub.authorizesDevice).toHaveBeenCalled();
+  });
+
+  it('is not answered to a phone the account does not know', async () => {
+    const stub = fakeStub({ authorizesDevice: vi.fn(async () => false) });
+    const token = await deviceToken();
+
+    const response = await worker.fetch(
+      new Request(`https://relay.example/r/${ACCOUNT}/status`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      envWith(stub),
+    );
+
+    expect(response.status).toBe(401);
+    expect(stub.status).not.toHaveBeenCalled();
   });
 });
 

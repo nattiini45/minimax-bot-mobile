@@ -112,6 +112,22 @@ describe('pairing', () => {
     expect(second.code).toBe('PAIRING_CODE_UNKNOWN');
   });
 
+  it('recognises the token it issued to a phone, and no other', async () => {
+    const session = makeSession();
+    const { code } = await session.createPairingCode('bridge-1', 'Desk');
+    const paired = await session.pairDevice(code, 'device-1', 'Phone', '1.0.0');
+    const token = paired.deviceToken!;
+
+    expect(await session.authorizesDevice('device-1', token)).toBe(true);
+    // A token the room never issued is not the phone's token.
+    expect(await session.authorizesDevice('device-1', 'some-other-token')).toBe(false);
+    // And the token of one phone is not the token of another.
+    expect(await session.authorizesDevice('device-2', token)).toBe(false);
+
+    await session.revokeDevice('device-1');
+    expect(await session.authorizesDevice('device-1', token)).toBe(false);
+  });
+
   it('rejects an unknown code', async () => {
     const session = makeSession();
     const result = await session.pairDevice('000000', 'device-1', 'Phone', '1.0.0');

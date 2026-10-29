@@ -5,7 +5,7 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button } from '../src/components/Button';
 import { Card, SectionHeader } from '../src/components/primitives';
 import { notifySuccess, tapMedium } from '../src/native/haptics';
-import { pairWithCode, relayStatus } from '../src/net/pairing';
+import { pairWithCode } from '../src/net/pairing';
 import { isValidRelayUrl } from '../src/net/relay-url';
 import { useTheme } from '../src/theme';
 import { connectRelay, useAppStore } from '../src/state/store';
@@ -49,16 +49,12 @@ export default function PairScreen() {
       const deviceId = `phone_${Math.random().toString(36).slice(2, 12)}`;
       const account = accountId.trim() || 'default';
 
-      // A relay holds one room per account. If no desktop is online on the
-      // account, the phone has the wrong one — and a pairing code for another
-      // room would not help. Say so, instead of failing on the code.
-      const status = await relayStatus(relayUrl.trim(), account);
-      if (status && !status.bridgeOnline) {
-        setErrorState(`No desktop is online on account "${account}". Check the account id in the MiniMax Bot Bridge window.`);
-        setError('No desktop is online on that account.');
-        return;
-      }
-
+      // There is no status check before pairing. The relay's status says whether
+      // a desktop is attached to an account, and the account id is the room's
+      // name - so a route that answered for any account would be a route that
+      // could be used to find out which accounts exist. The relay refuses that
+      // question without a credential, and the pairing attempt answers it
+      // anyway: a code that no desktop is waiting for is refused as one.
       const result = await pairWithCode({
         url: relayUrl.trim(),
         accountId: account,

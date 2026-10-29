@@ -113,6 +113,15 @@ export class Relay extends DurableObject<RelayEnv> {
     return this.session.listDevices();
   }
 
+  /**
+   * Whether a token is one this room issued to that phone.
+   *
+   * The device registry is the list of live credentials, so it decides.
+   */
+  authorizesDevice(deviceId: string, token: string): Promise<boolean> {
+    return this.session.authorizesDevice(deviceId, token);
+  }
+
   /** The bridge that owns this account, or null if no bridge has claimed it yet. */
   ownerBridgeId(): Promise<string | null> {
     return this.session.resolveOwnerBridgeId();
