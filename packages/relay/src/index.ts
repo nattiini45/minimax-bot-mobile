@@ -11,6 +11,7 @@ import { describeRelayError, verifyToken, type RelayErrorCode } from '@minimax-b
 import { accountIdFromPath } from './account-path.js';
 import { isBridgeTokenForAccount } from './authorize.js';
 import { Relay, type RelayEnv } from './relay.js';
+import { isCleartextRequestRefused } from './transport.js';
 
 // The Durable Object must be exported from the entrypoint so Wrangler can bind it.
 export { Relay };
@@ -22,6 +23,10 @@ export interface WorkerEnv extends RelayEnv {
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
   'cache-control': 'no-store',
+  // The relay is reached over the internet in production and it carries
+  // long-lived tokens, so the browser should refuse to talk to it in the clear
+  // even after the first visit.
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
   // The PWA is always a different origin from the relay (the app is a static export
   // served from somewhere else), and `POST` with a JSON body triggers a CORS
   // preflight. Without these headers the web client can never pair.
@@ -38,6 +43,24 @@ export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split('/').filter(Boolean);
+
+    // The relay carries long-lived tokens, so a request that arrived in the
+    // clear is refused rather than answered. A client that asks for `http://`
+    // then fails loudly instead of sending a pairing code or a device token
+    // across the network in the clear.
+    //
+    // The loopback exception is the relay a developer runs on their own machine:
+    // that traffic never leaves the machine, and it is how the bridge is
+    // developed against.
+    if (isCleartextRequestRefused(url.protocol, url.hostname)) {
+      return json(
+        {
+          error: 'https_required',
+          message: 'The relay only answers over https. Use an https:// or wss:// address.',
+        },
+        400,
+      );
+    }
 
     // Preflight: answer it before anything else so the browser lets the real
     // request through.

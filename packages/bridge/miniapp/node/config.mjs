@@ -41,6 +41,14 @@ export async function loadConfig(dataDir, overrides = {}) {
     bridgeName: overrides.bridgeName ?? stored.bridgeName ?? 'Desktop',
   };
 
+  // A relay address that is not one the bridge may use is not used at all. The
+  // bridge holds the long-lived token, so it never presents it to an address it
+  // cannot vouch for; the desktop is left unconfigured instead, which is the
+  // state a fresh install is in anyway.
+  if (config.relayUrl && !isAllowedRelayUrl(config.relayUrl)) {
+    config.relayUrl = '';
+  }
+
   if (!config.bridgeId) {
     config.bridgeId = `bridge_${randomId()}`;
     await saveConfig(dataDir, config);
