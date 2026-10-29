@@ -41,7 +41,7 @@ function makeSession(overrides: Partial<SessionOptions> = {}) {
 }
 
 async function pair(session: RelaySession, deviceId = 'device-1') {
-  const { code } = session.createPairingCode('bridge-1', 'Desk');
+  const { code } = await session.createPairingCode('bridge-1', 'Desk');
   return session.pairDevice(code, deviceId, 'Phone', '1.0.0');
 }
 
@@ -93,7 +93,7 @@ describe('relay tokens', () => {
 describe('pairing', () => {
   it('issues a code and exchanges it for a device token', async () => {
     const session = makeSession();
-    const { code } = session.createPairingCode('bridge-1', 'Desk');
+    const { code } = await session.createPairingCode('bridge-1', 'Desk');
     expect(code).toMatch(/^\d{6}$/);
 
     const result = await session.pairDevice(code, 'device-1', 'Phone', '1.0.0');
@@ -104,7 +104,7 @@ describe('pairing', () => {
 
   it('consumes the code so it cannot be reused', async () => {
     const session = makeSession();
-    const { code } = session.createPairingCode('bridge-1', 'Desk');
+    const { code } = await session.createPairingCode('bridge-1', 'Desk');
     await session.pairDevice(code, 'device-1', 'Phone', '1.0.0');
 
     const second = await session.pairDevice(code, 'device-2', 'Other', '1.0.0');
@@ -122,7 +122,7 @@ describe('pairing', () => {
   it('rejects an expired code', async () => {
     let now = 1_000_000;
     const session = makeSession({ now: () => now });
-    const { code, expiresAt } = session.createPairingCode('bridge-1', 'Desk');
+    const { code, expiresAt } = await session.createPairingCode('bridge-1', 'Desk');
     expect(expiresAt).toBeGreaterThan(now);
 
     now += 120_000;
@@ -134,11 +134,11 @@ describe('pairing', () => {
   it('lists paired devices and revokes them', async () => {
     const session = makeSession();
     await pair(session, 'device-1');
-    expect(session.listDevices()).toHaveLength(1);
+    expect(await session.listDevices()).toHaveLength(1);
 
-    expect(session.revokeDevice('device-1')).toBe(true);
-    expect(session.listDevices()[0]?.revoked).toBe(true);
-    expect(session.revokeDevice('nope')).toBe(false);
+    expect(await session.revokeDevice('device-1')).toBe(true);
+    expect((await session.listDevices())[0]?.revoked).toBe(true);
+    expect(await session.revokeDevice('nope')).toBe(false);
   });
 });
 
@@ -148,15 +148,15 @@ describe('a device releasing its own token', () => {
     const paired = await pair(session, 'device-1');
     const token = paired.deviceToken!;
 
-    expect(session.releaseDevice('device-1', token)).toBe(true);
-    expect(session.listDevices()[0]?.revoked).toBe(true);
+    expect(await session.releaseDevice('device-1', token)).toBe(true);
+    expect((await session.listDevices())[0]?.revoked).toBe(true);
   });
 
   it('makes the token stop working', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
     const token = paired.deviceToken!;
-    session.releaseDevice('device-1', token);
+    await session.releaseDevice('device-1', token);
 
     const registered = await session.registerSocket({
       id: 'peer-1',
@@ -174,8 +174,8 @@ describe('a device releasing its own token', () => {
     await pair(session, 'device-1');
 
     // A token that is not the one the registry issued must not revoke anything.
-    expect(session.releaseDevice('device-1', 'some-other-token')).toBe(false);
-    expect(session.listDevices()[0]?.revoked).toBe(false);
+    expect(await session.releaseDevice('device-1', 'some-other-token')).toBe(false);
+    expect((await session.listDevices())[0]?.revoked).toBe(false);
   });
 
   it('does not release a device that has the same id in another account', async () => {
@@ -184,14 +184,14 @@ describe('a device releasing its own token', () => {
     const session = makeSession();
     await pair(session, 'device-1');
 
-    expect(session.releaseDevice('device-1', 'a-token-from-another-account')).toBe(false);
-    expect(session.listDevices()[0]?.revoked).toBe(false);
+    expect(await session.releaseDevice('device-1', 'a-token-from-another-account')).toBe(false);
+    expect((await session.listDevices())[0]?.revoked).toBe(false);
   });
 
   it('does not release a device that was never paired here', async () => {
     const session = makeSession();
 
-    expect(session.releaseDevice('device-9', 'a-token')).toBe(false);
+    expect(await session.releaseDevice('device-9', 'a-token')).toBe(false);
   });
 });
 
@@ -238,7 +238,7 @@ describe('socket registration', () => {
   it('rejects a revoked device', async () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
-    session.revokeDevice('device-1');
+    await session.revokeDevice('device-1');
 
     const socket = new FakeSocket();
     const result = await session.registerSocket({
@@ -280,7 +280,7 @@ describe('socket registration', () => {
     await session.registerSocket({ id: 'p2', role: 'bridge', subject: 'bridge-1', accountId: ACCOUNT, token, socket: second });
 
     expect(first.closed?.code).toBe(CLOSE_CODE.replaced);
-    expect(session.status().bridgeOnline).toBe(true);
+    expect((await session.status()).bridgeOnline).toBe(true);
   });
 });
 
@@ -491,13 +491,13 @@ describe('frame routing', () => {
     expect(session.deviceSocketCount).toBe(1);
     session.unregisterSocket('d1');
     expect(session.deviceSocketCount).toBe(0);
-    expect(session.status().bridgeOnline).toBe(true);
+    expect((await session.status()).bridgeOnline).toBe(true);
   });
 
   it('marks the bridge offline when its socket unregisters', async () => {
     const { session } = await connected();
     session.unregisterSocket('b1');
-    expect(session.status().bridgeOnline).toBe(false);
+    expect((await session.status()).bridgeOnline).toBe(false);
   });
 
   it('ignores a malformed frame from the bridge', async () => {
@@ -640,7 +640,7 @@ describe('bridge ownership', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
-    expect(session.status().bridgeOnline).toBe(false);
+    expect((await session.status()).bridgeOnline).toBe(false);
   });
 
   it('accepts a bridge token that was minted for this account', async () => {
@@ -658,12 +658,12 @@ describe('bridge ownership', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(session.status().bridgeOnline).toBe(true);
+    expect((await session.status()).bridgeOnline).toBe(true);
   });
 
   it('refuses a foreign bridge on a room that already has an owner', async () => {
     const session = makeSession();
-    session.createPairingCode('bridge-1', 'Desk');
+    await session.createPairingCode('bridge-1', 'Desk');
     const { token } = await bridgeToken('bridge-2');
     const socket = new FakeSocket();
 
@@ -678,12 +678,12 @@ describe('bridge ownership', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe(CLOSE_CODE.unauthorized);
-    expect(session.status().bridgeOnline).toBe(false);
+    expect((await session.status()).bridgeOnline).toBe(false);
   });
 
   it('lets the owner back into the room it owns', async () => {
     const session = makeSession();
-    session.createPairingCode('bridge-1', 'Desk');
+    await session.createPairingCode('bridge-1', 'Desk');
     const { token } = await bridgeToken();
     const socket = new FakeSocket();
 
@@ -697,12 +697,12 @@ describe('bridge ownership', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(session.status().bridgeOnline).toBe(true);
+    expect((await session.status()).bridgeOnline).toBe(true);
   });
 
   it('does not let a foreign bridge displace the owner', async () => {
     const session = makeSession();
-    session.createPairingCode('bridge-1', 'Desk');
+    await session.createPairingCode('bridge-1', 'Desk');
     const { token: ownerToken } = await bridgeToken();
     const owner = new FakeSocket();
     await session.registerSocket({
@@ -728,7 +728,7 @@ describe('bridge ownership', () => {
     expect(result.ok).toBe(false);
     // The owner is still connected: the refusal happens before the eviction.
     expect(owner.closed).toBeNull();
-    expect(session.status().bridgeOnline).toBe(true);
+    expect((await session.status()).bridgeOnline).toBe(true);
   });
 });
 
@@ -802,7 +802,7 @@ describe('a ticket for a single connection', () => {
     const session = makeSession();
     const paired = await pair(session, 'device-1');
     const ticket = await session.issueTicket('device-1', 'device', paired.deviceToken!, ACCOUNT);
-    session.revokeDevice('device-1');
+    await session.revokeDevice('device-1');
 
     const registered = await session.registerSocket({
       id: 'peer-1',
@@ -817,7 +817,7 @@ describe('a ticket for a single connection', () => {
 
   it('lets the bridge in', async () => {
     const session = makeSession();
-    const { code } = session.createPairingCode('bridge-1', 'Desk');
+    const { code } = await session.createPairingCode('bridge-1', 'Desk');
     await session.pairDevice(code, 'device-1', 'Phone', '1.0.0');
     const { token } = await bridgeToken();
 

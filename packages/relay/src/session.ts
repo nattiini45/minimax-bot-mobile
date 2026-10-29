@@ -4,6 +4,17 @@
  * All relay behaviour lives here so it can be unit tested without a Cloudflare runtime:
  * the Durable Object is a thin adapter over this class. The session owns pairing codes,
  * device credentials, the event ring and the socket registry.
+ *
+ * What survives a restart and what does not is a decision, not an accident:
+ *
+ * - The **device registry**, the **pairing codes**, the **account's owner** and the
+ *   **sequence counter** are durable. They live in the Durable Object's storage.
+ *   Losing them unpairs every phone and rewinds the replay cursor, which is the
+ *   surprise this session exists to remove.
+ * - The **socket registry** and the **replay ring** are ephemeral. A socket cannot
+ *   survive an eviction anyway, and the ring is a cache of the last few hundred
+ *   frames — the sequence counter is the source of truth, so a ring that cannot
+ *   serve a client is reported to it as a gap instead of being skipped in silence.
  */
 
 import {
@@ -18,7 +29,7 @@ import {
   type TokenPayload,
 } from '@minimax-bot/protocol';
 
-import { SeqRing } from './ring.js';
+import { SeqRing, type RingEntry } from './ring.js';
 
 /**
  * How long a ticket for a single connection is good for.
@@ -46,7 +57,15 @@ export interface DeviceRecord {
   deviceId: string;
   deviceName: string;
   clientVersion: string;
-  token: string;
+  /**
+   * The digest of the token the relay issued to this device.
+   *
+   * The registry only ever asks whether the token it is given is the one it
+   * issued, so it keeps a digest rather than the credential: a copy of the
+   * Durable Object's storage is then a set of device ids, not a set of live
+   * phone credentials.
+   */
+  tokenHash: string;
   expiresAt: number;
   linkedAt: number;
   revoked: boolean;
@@ -67,9 +86,9 @@ export interface SessionOptions {
   /**
    * Durable storage, when the host has one.
    *
-   * The revocation cutoff lives here so that a revoked bridge token stays
-   * revoked across a restart. Without it, redeploying the relay would hand a
-   * killed credential back.
+   * The durable state of the room lives here: the device registry, the pairing
+   * codes, the account's owner and the sequence counter. Without it a restart
+   * empties the room.
    */
   storage?: SessionStorage;
 }
@@ -90,6 +109,14 @@ export const BRIDGE_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Where the revocation cutoff is kept. */
 const BRIDGE_TOKEN_CUTOFF_KEY = 'bridge-token-cutoff';
+/** Where the device registry is kept. */
+const DEVICES_KEY = 'devices';
+/** Where the outstanding pairing codes are kept. */
+const PAIRING_CODES_KEY = 'pairing-codes';
+/** Where the bridge that owns the account is kept. */
+const OWNER_BRIDGE_KEY = 'owner-bridge';
+/** Where the sequence counter is kept. */
+const SEQ_KEY = 'seq';
 
 export interface PairingCodeResult {
   code: string;
@@ -118,7 +145,8 @@ export class RelaySession {
    *
    * Set when the desktop asks for a pairing code. It is what binds a bridge token to
    * an account, so a token minted for one desktop cannot manage another account's
-   * devices.
+   * devices. It is durable: an account that forgets its owner would let the next
+   * desktop to ask for a code take the room over.
    */
   private bridgeId: string | null = null;
   /** Wrong pairing guesses since the last success, and the block they trigger. */
@@ -149,12 +177,120 @@ export class RelaySession {
   private readonly now: () => number;
   private readonly storage: SessionStorage | undefined;
 
+  /** The one read of the durable state, started the first time it is needed. */
+  private loading: Promise<void> | null = null;
+  /** The queue the sequence counter is written through. */
+  private seqWrite: Promise<void> = Promise.resolve();
+  /** True when the counter has moved since the last write. */
+  private seqDirty = false;
+
   constructor(options: SessionOptions) {
     this.secret = options.secret;
     this.ring = new SeqRing(options.ringCapacity ?? DEFAULT_RING_CAPACITY);
     this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEVICE_TOKEN_TTL_MS;
     this.now = options.now ?? (() => Date.now());
     this.storage = options.storage;
+  }
+
+  // -- durable state --------------------------------------------------------
+
+  /**
+   * Reads the durable state, once.
+   *
+   * Every entry point that touches the registry waits for this. Nothing can run
+   * before it has finished: a socket is only accepted after `registerSocket`,
+   * which waits for the load, so the sequence counter is never handed out before
+   * the stored one has been read.
+   */
+  private ensureLoaded(): Promise<void> {
+    if (!this.loading) {
+      this.loading = this.load();
+    }
+    return this.loading;
+  }
+
+  private async load(): Promise<void> {
+    const storage = this.storage;
+    if (!storage) return;
+    const [devices, codes, owner, seq] = await Promise.all([
+      storage.get<DeviceRecord[]>(DEVICES_KEY),
+      storage.get<PairingCodeRecord[]>(PAIRING_CODES_KEY),
+      storage.get<string>(OWNER_BRIDGE_KEY),
+      storage.get<number>(SEQ_KEY),
+    ]);
+    if (Array.isArray(devices)) {
+      for (const device of devices) {
+        if (device && typeof device.deviceId === 'string') {
+          this.devices.set(device.deviceId, device);
+        }
+      }
+    }
+    if (Array.isArray(codes)) {
+      const now = this.now();
+      for (const record of codes) {
+        // A code that ran out while the relay was down is not a code any more.
+        if (record && typeof record.code === 'string' && record.expiresAt > now) {
+          this.codes.set(record.code, record);
+        }
+      }
+    }
+    if (typeof owner === 'string' && owner) this.bridgeId = owner;
+    if (typeof seq === 'number' && Number.isFinite(seq) && seq > this.seq) this.seq = seq;
+  }
+
+  /** Writes the device registry down. */
+  private async persistDevices(): Promise<void> {
+    await this.storage?.put(DEVICES_KEY, [...this.devices.values()]);
+  }
+
+  /** Writes the outstanding pairing codes down, without the ones that ran out. */
+  private async persistCodes(): Promise<void> {
+    this.pruneExpiredCodes();
+    await this.storage?.put(PAIRING_CODES_KEY, [...this.codes.values()]);
+  }
+
+  /** Writes the account's owner down. */
+  private async persistOwner(): Promise<void> {
+    if (this.bridgeId === null) return;
+    await this.storage?.put(OWNER_BRIDGE_KEY, this.bridgeId);
+  }
+
+  /**
+   * Writes the sequence counter down, without waiting for it.
+   *
+   * The counter moves on every event frame and a Durable Object's storage write is
+   * not free, so the writes are queued and coalesced: a frame that arrives while
+   * a write is in flight is written by the next one, with the value the counter
+   * has at that moment. What lands in storage is always the newest counter and
+   * never an older one.
+   */
+  private persistSeq(): void {
+    this.seqDirty = true;
+    this.seqWrite = this.seqWrite.then(
+      () => this.flushSeq(),
+      () => this.flushSeq(),
+    );
+  }
+
+  private async flushSeq(): Promise<void> {
+    if (!this.seqDirty) return;
+    this.seqDirty = false;
+    const value = this.seq;
+    try {
+      await this.storage?.put(SEQ_KEY, value);
+    } catch {
+      /* the next frame tries again */
+    }
+  }
+
+  /**
+   * Waits until the durable state has been written down.
+   *
+   * The sequence counter is written as the frames arrive rather than one write
+   * per frame, so this is how a caller waits for the counter to be on disk.
+   */
+  async flush(): Promise<void> {
+    await this.seqWrite;
   }
 
   // -- bridge token lifecycle ------------------------------------------------
@@ -233,8 +369,14 @@ export class RelaySession {
 
   // -- pairing -------------------------------------------------------------
 
-  /** Issues a short-lived pairing code the phone can type. */
-  createPairingCode(bridgeId: string, bridgeName: string): PairingCodeResult {
+  /**
+   * Issues a short-lived pairing code the phone can type.
+   *
+   * The code and the account's owner are written down before the code is handed
+   * out: a code that a restart would wipe is a code the phone cannot use.
+   */
+  async createPairingCode(bridgeId: string, bridgeName: string): Promise<PairingCodeResult> {
+    await this.ensureLoaded();
     this.pruneExpiredCodes();
     // An account belongs to one bridge. A second bridge must not be able to take it
     // over: it would mint a device token inside someone else's account and read
@@ -248,11 +390,24 @@ export class RelaySession {
     // The desktop identifies itself here; from now on its token is the one that
     // manages this account's devices.
     this.bridgeId = bridgeId;
+    await this.persistOwner();
+    await this.persistCodes();
     return { code, expiresAt };
   }
 
   /** The bridge that owns this account, or null if no bridge has claimed it yet. */
   get ownerBridgeId(): string | null {
+    return this.bridgeId;
+  }
+
+  /**
+   * The bridge that owns this account, once the durable state has been read.
+   *
+   * The getter is the in-memory answer; this is the one a request may act on,
+   * because it waits for the registry to be loaded first.
+   */
+  async resolveOwnerBridgeId(): Promise<string | null> {
+    await this.ensureLoaded();
     return this.bridgeId;
   }
 
@@ -263,6 +418,7 @@ export class RelaySession {
     deviceName: string,
     clientVersion: string,
   ): Promise<PairingResponse> {
+    await this.ensureLoaded();
     // A wrong guess must not be free: the code space is only a million, and the
     // endpoint is unauthenticated by design (the code is the credential).
     if (this.now() < this.pairBlockedUntil) {
@@ -287,12 +443,14 @@ export class RelaySession {
     }
     if (record.expiresAt <= this.now()) {
       this.codes.delete(code);
+      await this.persistCodes();
       return { ok: false, code: 'PAIRING_CODE_EXPIRED', message: 'That pairing code expired.' };
     }
 
     // Single use: the code is consumed the moment it is claimed.
     this.codes.delete(code);
     this.failedPairAttempts = 0;
+    await this.persistCodes();
 
     const { token, expiresAt } = await issueToken(
       deviceId,
@@ -317,20 +475,28 @@ export class RelaySession {
       deviceId,
       deviceName,
       clientVersion,
-      token,
+      tokenHash: await hashToken(token),
       expiresAt,
       linkedAt: this.now(),
       revoked: false,
     });
+    // The registry is written down before the token is handed out: a phone that
+    // holds a token the registry has never heard of is a phone the relay will
+    // refuse the next time it connects.
+    await this.persistDevices();
 
     return { ok: true, deviceToken: token, expiresAt };
   }
 
   /** Revokes a device. Its token stops working immediately. */
-  revokeDevice(deviceId: string): boolean {
+  async revokeDevice(deviceId: string): Promise<boolean> {
+    await this.ensureLoaded();
     const device = this.devices.get(deviceId);
     if (!device) return false;
     device.revoked = true;
+    // The revocation is written down before it is acted on, so a restart cannot
+    // hand a phone back that the desktop deliberately cut off.
+    await this.persistDevices();
     const socket = this.deviceSockets.get(deviceId);
     if (socket) {
       try {
@@ -353,9 +519,10 @@ export class RelaySession {
    * @param deviceId The device the token names.
    * @param token The token the caller presented.
    */
-  releaseDevice(deviceId: string, token: string): boolean {
+  async releaseDevice(deviceId: string, token: string): Promise<boolean> {
+    await this.ensureLoaded();
     const device = this.devices.get(deviceId);
-    if (!device || device.token !== token) return false;
+    if (!device || !(await tokenMatches(device, token))) return false;
     return this.revokeDevice(deviceId);
   }
 
@@ -381,10 +548,12 @@ export class RelaySession {
     credential: string,
     accountId: string,
   ): Promise<{ ticket: string; expiresAt: number } | null> {
+    await this.ensureLoaded();
     this.pruneTickets();
     if (role === 'device') {
       const device = this.devices.get(subject);
-      if (!device || device.revoked || device.token !== credential) return null;
+      if (!device || device.revoked) return null;
+      if (!(await tokenMatches(device, credential))) return null;
     } else {
       const payload = await verifyToken(credential, this.secret);
       if (!payload || payload.role !== 'bridge' || payload.acc !== accountId) return null;
@@ -399,7 +568,8 @@ export class RelaySession {
     return { ticket: token, expiresAt };
   }
 
-  listDevices(): DeviceRecord[] {
+  async listDevices(): Promise<DeviceRecord[]> {
+    await this.ensureLoaded();
     return [...this.devices.values()].map((device) => ({ ...device }));
   }
 
@@ -427,6 +597,7 @@ export class RelaySession {
     | { ok: true; replay: { entries: { seq: number; data: string }[]; truncated: boolean } }
     | { ok: false; code: number; reason: string }
   > {
+    await this.ensureLoaded();
     const payload = await verifyToken(params.token, this.secret);
     if (!payload || payload.sub !== params.subject || payload.role !== params.role) {
       return { ok: false, code: CLOSE_CODE.unauthorized, reason: 'UNAUTHORIZED' };
@@ -446,7 +617,7 @@ export class RelaySession {
       // token the registry issued to that device.
       const allowed = isTicket
         ? Boolean(device && !device.revoked)
-        : Boolean(device && !device.revoked && device.token === params.token);
+        : Boolean(device && !device.revoked && (await tokenMatches(device, params.token)));
       if (!allowed) {
         return { ok: false, code: CLOSE_CODE.deviceRevoked, reason: 'DEVICE_REVOKED' };
       }
@@ -467,7 +638,7 @@ export class RelaySession {
         }
       }
       this.deviceSockets.set(params.subject, peer);
-      const replay = this.ring.since(params.lastSeq ?? 0);
+      const replay = this.replayFor(params.lastSeq ?? 0);
       return { ok: true, replay };
     }
 
@@ -511,6 +682,26 @@ export class RelaySession {
     };
     if (isTicket) this.usedTickets.set(payload.jti, payload.exp);
     return { ok: true, replay: { entries: [], truncated: false } };
+  }
+
+  /**
+   * The frames a resuming device missed, and whether it has to resynchronise.
+   *
+   * The ring is a cache of the last few hundred frames and the sequence counter is
+   * the source of truth, so the ring on its own cannot say whether a client is up
+   * to date: after a restart the ring is empty while the counter says there were
+   * frames. A client that is ahead of the counter, or one the ring cannot serve
+   * completely, is told so. A client that is silently short of frames keeps a view
+   * of the conversation with a hole in it, and never learns of it.
+   */
+  private replayFor(lastSeq: number): { entries: RingEntry[]; truncated: boolean } {
+    const replay = this.ring.since(lastSeq);
+    const missed = this.seq - lastSeq;
+    const truncated =
+      replay.truncated ||
+      lastSeq > this.seq ||
+      (missed > 0 && replay.entries.length < missed);
+    return { entries: replay.entries, truncated };
   }
 
   /**
@@ -564,10 +755,15 @@ export class RelaySession {
       return;
     }
     this.ring.push(this.seq, prepared.data);
+    // The counter is written down so that a restart does not rewind it: a phone
+    // whose cursor is above the relay's counter is a phone that silently drops
+    // every frame the relay sends next.
+    this.persistSeq();
     this.broadcastToDevices(prepared.data);
   }
 
-  status(): SessionStatus {
+  async status(): Promise<SessionStatus> {
+    await this.ensureLoaded();
     let activeDevices = 0;
     for (const device of this.devices.values()) {
       if (!device.revoked) activeDevices += 1;
@@ -662,7 +858,7 @@ export class RelaySession {
 }
 
 /**
- * A pairing code is a credential, so it is drawn from the CSPRNG rather than
+ * The pairing code is a credential, so it is drawn from the CSPRNG rather than
  * `Math.random`. The generator itself is the shared one, so the code the relay issues
  * is exactly the code the client's validator accepts.
  */
@@ -670,6 +866,23 @@ function secureRandom(): number {
   const buffer = new Uint32Array(1);
   crypto.getRandomValues(buffer);
   return buffer[0]! / 2 ** 32;
+}
+
+/**
+ * The digest the registry keeps instead of the token itself.
+ *
+ * The registry only ever compares a token with the one it issued, so a digest is
+ * enough — and it keeps the Durable Object's storage from being a list of live
+ * phone credentials.
+ */
+async function hashToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Whether the token the caller presented is the one the registry issued. */
+async function tokenMatches(device: DeviceRecord, token: string): Promise<boolean> {
+  return device.tokenHash === (await hashToken(token));
 }
 
 export type { TokenPayload };

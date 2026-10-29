@@ -206,9 +206,12 @@ export default {
         if (!authorized) {
           return relayError('UNAUTHORIZED', 'The bridge token is not valid.', 401);
         }
-        // Never hand the device tokens back, not even to the bridge.
+        // Never hand the device credentials back, not even to the bridge.
         const devices = (await stub.listDevices()).map((device) => {
-          const { token: _token, ...rest } = device as { token?: string };
+          const { token: _token, tokenHash: _tokenHash, ...rest } = device as {
+            token?: string;
+            tokenHash?: string;
+          };
           return rest;
         });
         return json({ devices }, 200);

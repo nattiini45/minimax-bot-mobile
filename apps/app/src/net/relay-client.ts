@@ -156,15 +156,7 @@ export class RelayClient {
       } catch {
         return;
       }
-      if (frame.type === 'hello.ok') {
-        this.attempt = 0;
-      }
-      // A frame the relay has already sequenced is one the app has already applied.
-      if (typeof frame.seq === 'number') {
-        if (frame.seq <= this.lastSeq) return;
-        this.lastSeq = frame.seq;
-      }
-      this.options.onFrame?.(frame);
+      this.applyFrame(frame);
     };
 
     socket.onclose = (event) => {
@@ -206,6 +198,36 @@ export class RelayClient {
       const message = (event as { message?: string })?.message ?? '';
       if (message) this.refused = looksLikeRefusal(message);
     };
+  }
+
+  /**
+   * Applies one frame that arrived from the relay.
+   *
+   * The relay's hello carries the number its sequence counter has reached. When
+   * that number is *below* the one this phone has already seen, the relay's
+   * counter was rewound — the relay lost its state and started again. The phone
+   * rewinds with it and asks for a fresh view, because a phone whose cursor sits
+   * above the relay's counter silently drops every frame the relay sends next:
+   * their numbers are all below its cursor, so they are discarded without a word
+   * and the conversation simply stops arriving.
+   */
+  private applyFrame(frame: Frame): void {
+    if (frame.type === 'hello.ok') {
+      this.attempt = 0;
+      const payload = frame.payload as { seq?: number; truncated?: boolean } | undefined;
+      const relaySeq = payload?.seq;
+      if (typeof relaySeq === 'number' && relaySeq < this.lastSeq) {
+        this.lastSeq = relaySeq;
+        // The view has a hole in it, so the app is told to rebuild it.
+        frame = { ...frame, payload: { ...payload, truncated: true } };
+      }
+    }
+    // A frame the relay has already sequenced is one the app has already applied.
+    if (typeof frame.seq === 'number') {
+      if (frame.seq <= this.lastSeq) return;
+      this.lastSeq = frame.seq;
+    }
+    this.options.onFrame?.(frame);
   }
 
   disconnect(): void {
