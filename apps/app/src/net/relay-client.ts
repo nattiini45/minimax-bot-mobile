@@ -116,14 +116,17 @@ export class RelayClient {
         method: 'POST',
         headers: { authorization: `Bearer ${this.options.token}` },
       });
-      if (response.status === 401 || response.status === 403) {
-        return { kind: 'refused', code: 'UNAUTHORIZED' };
+      // The relay's own body decides. A status on its own does not: something in front
+      // of the relay answers 401 as well, and that must not cost the user their
+      // pairing.
+      const body = (await response.json().catch(() => null)) as {
+        ticket?: string;
+        code?: string;
+      } | null;
+      if (body && typeof body.ticket === 'string') return { kind: 'ticket', ticket: body.ticket };
+      if (body && (body.code === 'UNAUTHORIZED' || body.code === 'DEVICE_REVOKED')) {
+        return { kind: 'refused', code: body.code };
       }
-      if (!response.ok) return { kind: 'none' };
-      const body = (await response.json()) as { ticket?: string; code?: string };
-      if (typeof body.ticket === 'string') return { kind: 'ticket', ticket: body.ticket };
-      // A relay that refuses the credential in the body rather than the status.
-      if (body.code === 'UNAUTHORIZED') return { kind: 'refused', code: body.code };
       return { kind: 'none' };
     } catch {
       return { kind: 'none' };
@@ -166,6 +169,10 @@ export class RelayClient {
       // The backoff is only reset once the handshake completes. A relay that accepts the
       // socket and then drops it would otherwise be retried every second, forever.
       this.opened = true;
+      // A connection that worked is a fresh start for the ticket fallback: the relay
+      // knows what a ticket is now, and a later failure may be worth one more try with
+      // the token.
+      this.usedTokenFallback = false;
       this.setStatus('online');
     };
 
@@ -184,10 +191,20 @@ export class RelayClient {
       this.socket = null;
       this.setStatus('offline');
       if (this.closed) return;
+      // A connection that was refused before it opened, and that carried a
+      // ticket, is tried once more with the token: a relay whose room predates
+      // the ticket does not know what one is, and it refuses a ticket the same way
+      // it refuses a credential it does not accept. The fallback is one-shot, so a
+      // relay that refuses the token as well ends the attempt.
+      if (!this.opened && ticket && !this.usedTokenFallback) {
+        this.usedTokenFallback = true;
+        this.openSocket(null);
+        return;
+      }
       // A revoked or replaced device must stop trying: reconnecting forever with a
-      // credential the relay has already rejected is a loop the user cannot see. This
-      // comes before the ticket fallback, because a ticket is made from the same
-      // credential: if the ticket was refused, the token will be refused too.
+      // credential the relay has already rejected is a loop the user cannot see.
+      // The token carried the credential on the second attempt, so this is the relay's
+      // own verdict on it.
       if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_DEVICE_REVOKED) {
         this.closed = true;
         this.options.onFatal?.(event.code);
@@ -196,14 +213,6 @@ export class RelayClient {
       if (event.code === CLOSE_REPLACED) {
         this.closed = true;
         this.options.onFatal?.(event.code);
-        return;
-      }
-      // A connection that was refused before it opened, and that carried a
-      // ticket, is tried once more with the token: a relay whose room predates
-      // the ticket does not know what one is.
-      if (!this.opened && ticket && !this.usedTokenFallback) {
-        this.usedTokenFallback = true;
-        this.openSocket(null);
         return;
       }
       this.scheduleReconnect();

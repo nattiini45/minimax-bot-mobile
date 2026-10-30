@@ -72,14 +72,19 @@ describe('a phone the relay stops serving', () => {
     connectRelay(session);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The relay says this phone was revoked, in its own close code.
+    // The relay says this phone was revoked, in its own close code. The connection
+    // carried a ticket, so the phone tries the token once before it gives up - a room
+    // that predates the ticket refuses a ticket the same way it refuses a credential
+    // it does not accept.
     sockets[0]?.onclose?.({ code: 4003 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sockets[1]?.onclose?.({ code: 4003 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const state = useAppStore.getState();
     // The session is gone: the credential cannot work.
     expect(state.session).toBeNull();
-    // The user is told why.
+    // The reason is recorded.
     expect(state.lastError).toContain('Pair it again');
     // The queued message is not.
     expect(state.outbox).toHaveLength(1);

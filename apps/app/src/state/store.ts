@@ -53,8 +53,8 @@ export interface OutboxItem {
    *
    * The phone holds one credential at a time, so an operation that belongs to
    * another account can never be delivered: the room it was written for is
-   * reached with a credential this phone does not have. The outbox survives
-   * unpairing, so without this the next account's connection would flush it.
+   * reached with a credential this phone does not have. The outbox survives a
+   * dropped session, so without this the next account's connection would flush it.
    */
   accountId: string;
 }
@@ -506,6 +506,26 @@ async function persistOutbox(outbox: OutboxItem[]): Promise<void> {
   }
 }
 
+/**
+ * How many operations the phone keeps waiting to send.
+ *
+ * The queue survives a dropped session, so a phone that is offline for a long time
+ * would otherwise grow it without bound and then deliver a week-old conversation in
+ * one burst. The oldest goes first: the message a user just wrote is the one they are
+ * waiting for.
+ */
+const MAX_OUTBOX_ITEMS = 100;
+
+/**
+ * Keeps the queue within its bound.
+ *
+ * @param outbox the queue as it would be
+ * @returns the queue, oldest first, within the bound
+ */
+function boundedOutbox(outbox: OutboxItem[]): OutboxItem[] {
+  return outbox.length > MAX_OUTBOX_ITEMS ? outbox.slice(outbox.length - MAX_OUTBOX_ITEMS) : outbox;
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   session: null,
   status: 'idle',
@@ -571,7 +591,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const sent = client?.send(frame) ?? false;
     if (!sent) {
-      const outbox = [
+      const outbox = boundedOutbox([
         ...get().outbox,
         {
           opId,
@@ -582,7 +602,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           // another account's room.
           accountId: get().session?.accountId ?? '',
         },
-      ];
+      ]);
       set({ outbox });
       void persistOutbox(outbox);
     }
@@ -620,7 +640,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const sent = client?.send(frame) ?? false;
       if (!sent) {
-        const outbox = [
+        const outbox = boundedOutbox([
           ...get().outbox,
           {
             opId,
@@ -631,7 +651,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             // another account's room.
             accountId: get().session?.accountId ?? '',
           },
-        ];
+        ]);
         set({ outbox });
         void persistOutbox(outbox);
       }

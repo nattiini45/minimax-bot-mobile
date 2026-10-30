@@ -34,8 +34,12 @@ afterEach(() => {
 });
 
 describe('a relay that refuses the phone', () => {
-  it('is fatal when the relay says so with a status', async () => {
-    globalThis.fetch = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+  it('is fatal when the relay says so with its own code', async () => {
+    globalThis.fetch = jest.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ ok: false, code: 'UNAUTHORIZED', message: 'The token is not valid.' }),
+    })) as unknown as typeof fetch;
     const sockets: FakeSocket[] = [];
     globalThis.WebSocket = class extends FakeSocket {
       constructor(url: string) {

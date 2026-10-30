@@ -6,9 +6,9 @@ import { connectRelay, unpairPhone, useAppStore } from '../src/state/store';
  *
  * The phone holds one credential at a time, so an operation composed for one
  * account cannot be delivered to another one: the room it belongs to is reached
- * with a credential this phone does not have. The outbox outlives unpairing, so
- * without the account on every entry the next account's connection would flush
- * it.
+ * with a credential this phone does not have. The outbox outlives a dropped
+ * session, so without the account on every entry the next account's connection
+ * would flush it.
  */
 
 const mockSent: unknown[] = [];
@@ -58,6 +58,21 @@ beforeEach(() => {
 });
 
 describe('the outbox', () => {
+  it('keeps at most a hundred operations', () => {
+    // The queue survives a dropped session, so a phone that is offline for a long
+    // time would otherwise grow it without bound and then deliver a week-old
+    // conversation in one burst.
+    useAppStore.setState({ outbox: [] });
+    for (let index = 0; index < 120; index += 1) {
+      useAppStore.getState().request('op.send_message', { chatId: 'bot:b1', text: `message ${index}` });
+    }
+
+    const outbox = useAppStore.getState().outbox;
+    expect(outbox.length).toBe(100);
+    // The newest are the ones that are kept.
+    expect(outbox[outbox.length - 1]?.payload).toEqual({ chatId: 'bot:b1', text: 'message 119' });
+  });
+
   it('remembers the account an operation was composed for', () => {
     useAppStore.setState({ session: SESSION_A });
     connectRelay(SESSION_A);
