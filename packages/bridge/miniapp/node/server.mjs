@@ -46,12 +46,16 @@ export async function start(context) {
   const setConfig = async (next) => {
     await saveConfig(context.dataDir, next);
     bridge.config = next;
-    bridge.relay.url = next.relayUrl;
-    bridge.relay.accountId = next.accountId;
-    bridge.relay.bridgeId = next.bridgeId;
-    bridge.relay.token = next.bridgeToken;
-    bridge.relay.name = next.bridgeName;
-    bridge.relay.start();
+    // The client is told the new settings as a whole: it closes the socket that was
+    // open against the old address on purpose and connects again. Leaving the old
+    // socket open would leave its close event free to clear the new one.
+    bridge.relay.reconfigure({
+      url: next.relayUrl,
+      accountId: next.accountId,
+      bridgeId: next.bridgeId,
+      token: next.bridgeToken,
+      name: next.bridgeName,
+    });
   };
 
   const server = createServer((request, response) => {

@@ -166,20 +166,52 @@ export class RelayClient {
     this.connect();
   }
 
+  /**
+   * Replaces the connection settings and connects again.
+   *
+   * The socket that was open against the old address is closed on purpose. Its close
+   * event belongs to a socket this client has already let go of, and the guard in the
+   * close handler makes it a no-op, so it cannot clear the socket that replaced it.
+   *
+   * @param {{url: string, accountId: string, bridgeId: string, token: string, name: string}} settings
+   */
+  reconfigure(settings) {
+    this.url = settings.url;
+    this.accountId = settings.accountId;
+    this.bridgeId = settings.bridgeId;
+    this.token = settings.token;
+    this.name = settings.name ?? this.name;
+    // The new relay may be a different relay, and it may well know what a ticket is.
+    this.usedTokenFallback = false;
+    this.attempt = 0;
+    this.closeSocket();
+    this.start();
+  }
+
+  /**
+   * Closes the socket that is open, if there is one.
+   *
+   * The reference is taken before the socket is closed, so the close event that
+   * follows finds a client that has already let this socket go.
+   */
+  closeSocket() {
+    const socket = this.socket;
+    this.socket = null;
+    if (!socket) return;
+    try {
+      socket.close();
+    } catch {
+      /* already gone */
+    }
+  }
+
   stop() {
     this.closed = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    if (this.socket) {
-      try {
-        this.socket.close();
-      } catch {
-        /* already gone */
-      }
-      this.socket = null;
-    }
+    this.closeSocket();
     this.onStatus(false);
   }
 
@@ -242,6 +274,11 @@ export class RelayClient {
     });
 
     socket.addEventListener('close', () => {
+      // A close event belongs to the socket it came from. If this client has already
+      // let that socket go - because the relay configuration changed and the socket
+      // was closed on purpose - the event is about a connection that is no longer
+      // this client's, and it must not clear the socket that replaced it.
+      if (this.socket !== socket) return;
       this.socket = null;
       this.onStatus(false);
       if (this.closed) return;
