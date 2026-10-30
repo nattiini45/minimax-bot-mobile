@@ -4,7 +4,8 @@
  * The app talks to its relay over TLS in production (`https://`/`wss://`). A relay
  * that runs locally — `wrangler dev` on the developer's laptop, or the same thing
  * reached from an Android device through `adb reverse` — speaks plain HTTP on the
- * loopback interface, and Android blocks cleartext by default from API 28 onwards.
+ * loopback interface, and Android blocks cleartext by default for apps that
+ * target API 28 or later. This app targets API 36.
  *
  * The exception is a development convenience, so it belongs to the development
  * build only:

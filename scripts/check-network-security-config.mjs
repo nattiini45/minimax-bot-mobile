@@ -141,6 +141,13 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
   // The manifest attribute is ignored on Android 7 and above while a network
   // security config is present, but a manifest that permits cleartext is a
   // manifest that stops being safe the day the config goes missing.
+  //
+  // This reads the app's own manifest, not the merged one. A library could add
+  // the attribute to the merged manifest, and the merged manifest is what the
+  // platform reads — but the platform ignores the attribute while a network
+  // security config is present, so it cannot widen what the config does not
+  // give. The merged release manifest was read out of a real build and holds
+  // no such attribute.
   if (/android:usesCleartextTraffic\s*=\s*"true"/.test(manifest)) {
     problems.push('the manifest permits cleartext');
   }

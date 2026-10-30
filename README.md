@@ -199,7 +199,8 @@ The output is `apps/app/android/app/build/outputs/apk/release/app-release.apk`.
 The app talks to its relay over TLS. A relay running on the developer's own
 machine — `wrangler dev` on the laptop, reached from a device through
 `adb reverse` — speaks plain HTTP on the loopback interface, and Android blocks
-cleartext by default from API 28 onwards. So the two builds differ:
+cleartext by default for apps that target API 28 or later. This app targets API
+36. So the two builds differ:
 
 - **The release build forbids cleartext outright.** Its network security config
   (`src/main/res/xml/network_security_config.xml`) carries no exception at all,
