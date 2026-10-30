@@ -89,16 +89,47 @@ echo "=== prebuild the native project ==="
 # plugin out of the APK, which is how a stale bundle once shipped.
 (cd "$BUILD_DIR/apps/app" && npx expo prebuild --platform android --no-install)
 
-echo "=== the relay needs cleartext on the loopback interface only ==="
+echo "=== the release build may not speak cleartext; the development builds may, on the loopback only ==="
+# The release build ships the main source set's config, which forbids cleartext
+# outright. The development builds ship the debug and debugOptimized source
+# sets' copies of the same resource, which keep the loopback exception so that
+# a relay running on the developer's own machine is still reachable. Android
+# merges the build-type source set over the main one, so the release APK never
+# sees the exception.
 NETCONF="$BUILD_DIR/apps/app/android/app/src/main/res/xml/network_security_config.xml"
+DEBUG_NETCONF="$BUILD_DIR/apps/app/android/app/src/debug/res/xml/network_security_config.xml"
+DEBUG_OPTIMIZED_NETCONF="$BUILD_DIR/apps/app/android/app/src/debugOptimized/res/xml/network_security_config.xml"
 MANIFEST="$BUILD_DIR/apps/app/android/app/src/main/AndroidManifest.xml"
 cat "$NETCONF"
+cat "$DEBUG_NETCONF"
+cat "$DEBUG_OPTIMIZED_NETCONF"
 grep -o 'android:networkSecurityConfig="[^"]*"' "$MANIFEST"
 
 # Assert the invariant rather than print it. A gate that only prints is not a
-# gate: the build has to fail when the generated config lets cleartext out to
-# anywhere other than the loopback interface.
-node "$SOURCE_DIR/scripts/check-network-security-config.mjs" "$NETCONF" "$MANIFEST"
+# gate: the build has to fail when the generated release config lets cleartext
+# out anywhere, and when a generated development config has lost the loopback
+# exception the local-relay workflow needs.
+node "$SOURCE_DIR/scripts/check-network-security-config.mjs" \
+  "$NETCONF" "$MANIFEST" "$DEBUG_NETCONF" "$DEBUG_OPTIMIZED_NETCONF"
+
+# The gate reads the source sets, and a source set of the build type's own is
+# merged into the release build over the main one. The generated project is
+# reused between builds, so a config left behind by an earlier one in another
+# source set would reach the release build without the gate seeing it. The
+# project must hold exactly the configs the plugin writes, and no others.
+CONFIGS_EXPECTED="$(printf '%s\n' \
+  'src/debug/res/xml/network_security_config.xml' \
+  'src/debugOptimized/res/xml/network_security_config.xml' \
+  'src/main/res/xml/network_security_config.xml')"
+CONFIGS_FOUND="$(cd "$BUILD_DIR/apps/app/android/app" && find src -name 'network_security_config.xml' | LC_ALL=C sort || true)"
+if [ "$CONFIGS_FOUND" != "$CONFIGS_EXPECTED" ]; then
+  echo "the generated Android project does not hold exactly the network security configs the plugin writes" >&2
+  echo "expected:" >&2
+  echo "$CONFIGS_EXPECTED" >&2
+  echo "found:" >&2
+  echo "$CONFIGS_FOUND" >&2
+  exit 1
+fi
 
 echo "=== assembleRelease ==="
 cd "$BUILD_DIR/apps/app/android"

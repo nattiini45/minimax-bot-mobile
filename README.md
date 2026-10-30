@@ -194,6 +194,49 @@ scripts/build-android.sh
 
 The output is `apps/app/android/app/build/outputs/apk/release/app-release.apk`.
 
+### Cleartext: the release build has none
+
+The app talks to its relay over TLS. A relay running on the developer's own
+machine — `wrangler dev` on the laptop, reached from a device through
+`adb reverse` — speaks plain HTTP on the loopback interface, and Android blocks
+cleartext by default for apps that target API 28 or later. This app targets API
+36. So the two builds differ:
+
+- **The release build forbids cleartext outright.** Its network security config
+  (`src/main/res/xml/network_security_config.xml`) carries no exception at all,
+  so the device token cannot travel in the clear in a build that anybody can
+  install.
+- **The development builds keep the loopback exception.** The same resource in
+  the `debug` and `debugOptimized` source sets
+  (`src/debug/res/xml/network_security_config.xml` and
+  `src/debugOptimized/res/xml/network_security_config.xml`) permits cleartext
+  for `localhost` and `127.0.0.1` only. Android merges the build-type source
+  set over the main one, so the development builds get the exception and the
+  release build gets the strict configuration. The resource has the same name in
+  all of them, so the manifest does not have to change.
+
+To reach a relay on your own machine from a device in development:
+
+```bash
+cd packages/relay && npx wrangler dev --port 8787
+adb reverse tcp:8787 tcp:8787     # the device's localhost becomes the laptop's
+```
+
+Then point the phone at `http://localhost:8787`. A release build refuses that
+address at the platform level, which is the point.
+
+The React Native template's debug manifests carry `usesCleartextTraffic="true"`
+so that the development builds can reach the Metro dev server. It does not
+widen them: Android ignores that attribute from API 24 onwards whenever a
+network security config is present, and this app's `minSdkVersion` is 24. The
+release build does not inherit those manifests at all, so it has neither the
+attribute nor the exception.
+
+The build asserts every configuration rather than printing them:
+`scripts/check-network-security-config.mjs` fails the build when the release
+config would permit cleartext anywhere, and when a development config has lost
+the loopback exception the local-relay workflow needs.
+
 ## Scripts
 
 | Command | What it does |
