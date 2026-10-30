@@ -68,6 +68,7 @@ function makeDeps(overrides = {}) {
     bridge: {
       relay: { configured: true, connected: true, listDevices: async () => [] },
       diagnostics: () => ({}),
+      desktopDiagnostics: () => ({}),
       pending: { list: () => [] },
       readTeam: async () => ({ members: [] }),
       tools: { catalog: [] },
