@@ -17,6 +17,8 @@ export default function ApprovalsScreen() {
   const theme = useTheme();
   const approvals = useAppStore((state) => state.approvals);
   const questions = useAppStore((state) => state.questions);
+  const decided = useAppStore((state) => state.decided);
+  const respondPermission = useAppStore((state) => state.respondPermission);
   const request = useAppStore((state) => state.request);
 
   return (
@@ -38,21 +40,23 @@ export default function ApprovalsScreen() {
             ) : null}
             <View style={styles.actions}>
               <Button
-                label="Deny"
+                label={decided[approval.requestId] ? 'Decided' : 'Deny'}
                 variant="ghost"
                 size="sm"
+                disabled={Boolean(decided[approval.requestId])}
                 onPress={() => {
                   tapMedium();
-                  request('op.respond_permission', { requestId: approval.requestId, decision: 'deny' });
+                  respondPermission(approval.requestId, 'deny');
                 }}
               />
               <Button
-                label="Allow once"
+                label={decided[approval.requestId] ? 'Decided' : 'Allow once'}
                 variant="primary"
                 size="sm"
+                disabled={Boolean(decided[approval.requestId])}
                 onPress={() => {
                   tapMedium();
-                  request('op.respond_permission', { requestId: approval.requestId, decision: 'allowOnce' });
+                  respondPermission(approval.requestId, 'allowOnce');
                 }}
               />
             </View>

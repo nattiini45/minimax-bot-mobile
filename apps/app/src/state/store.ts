@@ -94,6 +94,21 @@ export interface AppState {
   helpers: AppHelper[];
   schedules: AppSchedule[];
   approvals: AppPermission[];
+  /**
+   * The decisions this phone has already given, by request id.
+   *
+   * The approval stays on screen until the desktop says it is resolved, so the phone
+   * has to remember that it already answered it: otherwise the approve control is
+   * still there after the tap, and a second tap sends a second answer.
+   */
+  decided: Record<string, string>;
+  /**
+   * The operation each decision was sent with, by request id.
+   *
+   * A decision the desktop refused has to be given back, and the refusal names the
+   * operation and not the request, so the phone needs the link between them.
+   */
+  decidedOps: Record<string, string>;
   questions: AppQuestion[];
   usage: AppUsage | null;
 
@@ -132,6 +147,14 @@ export interface AppState {
   sendChatMessage: (chatId: string, text: string) => void;
   /** Adds a reaction to a message. The bridge confirms it with `evt.reaction_added`. */
   react: (messageId: string, emoji: string) => void;
+  /**
+   * Answers a permission request.
+   *
+   * The decision is recorded before it is sent, so the approve control is disabled
+   * straight away. A second tap would otherwise send a second answer for the same
+   * request, and the desktop would refuse it.
+   */
+  respondPermission: (requestId: string, decision: 'allowOnce' | 'deny') => void;
   flushOutbox: () => void;
   /** Re-reads everything the phone can show: the roster, tasks, helpers and schedules. */
   refreshTeam: () => void;
@@ -516,6 +539,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   helpers: [],
   schedules: [],
   approvals: [],
+  decided: {},
+  decidedOps: {},
   questions: [],
   usage: null,
 
@@ -692,6 +717,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().request('op.react', { messageId, emoji });
   },
 
+  respondPermission: (requestId, decision) => {
+    if (!requestId) return;
+    // A decision that has already been given is not given again. The desktop claims
+    // the request before it tells the Host, so a second answer for the same request
+    // would be refused there; the phone does not send one.
+    if (get().decided[requestId]) return;
+    const opId = get().request('op.respond_permission', { requestId, decision });
+    set((state) => ({
+      decided: { ...state.decided, [requestId]: decision },
+      decidedOps: { ...state.decidedOps, [requestId]: opId },
+    }));
+  },
+
   applyFrame: (frame) => {
     const state = get();
     // The envelope is typed loosely on purpose; the payload shape depends on the frame type.
@@ -744,6 +782,22 @@ export const useAppStore = create<AppState>((set, get) => ({
           return { pendingOp: next };
         });
         pending.reject(new Error(p.message ?? 'The request failed.'));
+      }
+      // A decision the desktop refused is given back: the request is still waiting
+      // for an answer, and the phone has to be able to give one.
+      if (opId) {
+        set((current) => {
+          const decided = { ...current.decided };
+          const decidedOps = { ...current.decidedOps };
+          let changed = false;
+          for (const [requestId, sentOpId] of Object.entries(decidedOps)) {
+            if (sentOpId !== opId) continue;
+            delete decided[requestId];
+            delete decidedOps[requestId];
+            changed = true;
+          }
+          return changed ? { decided, decidedOps } : current;
+        });
       }
       set({ lastError: p.message ?? 'The request failed.' });
       return;
@@ -955,13 +1009,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'evt.permission_requested': {
         const request = p.request as AppPermission | undefined;
         if (!request) break;
-        set({ approvals: [...state.approvals.filter((a) => a.requestId !== request.requestId), request] });
+        const approvals = [...state.approvals.filter((a) => a.requestId !== request.requestId), request];
+        // A decision is only remembered while the approval is on screen, so the map
+        // cannot grow with approvals that are long gone.
+        const live = new Set(approvals.map((a) => a.requestId));
+        const decided: Record<string, string> = {};
+        const decidedOps: Record<string, string> = {};
+        for (const [id, value] of Object.entries(state.decided)) {
+          if (!live.has(id)) continue;
+          decided[id] = value;
+          const opId = state.decidedOps[id];
+          if (opId !== undefined) decidedOps[id] = opId;
+        }
+        set({ approvals, decided, decidedOps });
         break;
       }
 
       case 'evt.permission_resolved': {
         const requestId = p.requestId;
-        set({ approvals: state.approvals.filter((a) => a.requestId !== requestId) });
+        const decided = { ...state.decided };
+        const decidedOps = { ...state.decidedOps };
+        delete decided[requestId];
+        delete decidedOps[requestId];
+        set({ approvals: state.approvals.filter((a) => a.requestId !== requestId), decided, decidedOps });
         break;
       }
 
