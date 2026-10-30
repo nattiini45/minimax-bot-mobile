@@ -16,6 +16,7 @@ export default function TeamScreen() {
   const groups = useAppStore((state) => state.groups);
   const diagnostics = useAppStore((state) => state.diagnostics);
   const session = useAppStore((state) => state.session);
+  const lastError = useAppStore((state) => state.lastError);
 
   if (!session) {
     return (
@@ -25,6 +26,13 @@ export default function TeamScreen() {
           title="No desktop linked yet"
           body="Pair this phone with MiniMax Code to reach your team."
         />
+        {/* The reason the phone lost its link, when there is one: "Pair this phone"
+            on its own does not say why the phone is asking to be paired again. */}
+        {lastError ? (
+          <Card style={styles.reason}>
+            <Text style={[styles.warningTitle, { color: theme.colors.danger }]}>{lastError}</Text>
+          </Card>
+        ) : null}
         <View style={styles.cta}>
           <Pressable onPress={() => router.push('/pair')} style={[styles.ctaButton, { backgroundColor: theme.colors.user }]}>
             <Text style={[styles.ctaLabel, { color: theme.colors.userInk }]}>Pair this phone</Text>
@@ -160,6 +168,10 @@ const styles = StyleSheet.create({
   cta: {
     paddingHorizontal: 16,
     paddingBottom: 32,
+  },
+  reason: {
+    marginHorizontal: 16,
+    marginBottom: 12,
   },
   ctaButton: {
     borderRadius: 999,

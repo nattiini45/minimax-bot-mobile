@@ -107,8 +107,12 @@ describe('asking for a ticket', () => {
     expect(outcome).toEqual({ kind: 'none' });
   });
 
-  it('is a refusal when the relay says so with a status', async () => {
-    global.fetch = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+  it('is a refusal when the relay says so with its own code', async () => {
+    global.fetch = jest.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ ok: false, code: 'UNAUTHORIZED' }),
+    })) as unknown as typeof fetch;
 
     const outcome = await (
       client() as unknown as { fetchTicket(): Promise<{ kind: string }> }
