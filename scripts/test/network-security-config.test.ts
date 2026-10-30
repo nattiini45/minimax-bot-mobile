@@ -99,6 +99,49 @@ describe('the network security config the release build ships', () => {
 
     expect(checker.checkNetworkSecurityConfig(withComment, GOOD_MANIFEST)).toEqual([]);
   });
+
+  it('names the host when a domain-config is never closed', () => {
+    // Android's schema gives a domain-config the default
+    // `cleartextTrafficPermitted="true"`, so one that is not closed still
+    // grants the exception. The gate has to see it, and has to say which host.
+    const unclosed = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">example.com</domain>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
+`;
+    const problems = checker.checkNetworkSecurityConfig(unclosed, GOOD_MANIFEST);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('example.com');
+  });
+
+  it('names the host when the tags are written in another case', () => {
+    const otherCase = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <DOMAIN-CONFIG cleartextTrafficPermitted="true">
+        <DOMAIN includeSubdomains="false">example.com</DOMAIN>
+    </DOMAIN-CONFIG>
+    <BASE-CONFIG cleartextTrafficPermitted="false" />
+</network-security-config>
+`;
+    const problems = checker.checkNetworkSecurityConfig(otherCase, GOOD_MANIFEST);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('example.com');
+  });
+
+  it('fails when the manifest names another config', () => {
+    const manifest = `<manifest>
+    <application android:networkSecurityConfig="@xml/other_config" />
+</manifest>
+`;
+    const problems = checker.checkNetworkSecurityConfig(RELEASE, manifest);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('manifest');
+  });
 });
 
 describe('the network security config the debug build ships', () => {
@@ -158,6 +201,31 @@ describe('the network security config the debug build ships', () => {
 
     expect(problems.length).toBeGreaterThan(0);
     expect(problems.join(' ')).toContain('forbid cleartext');
+  });
+
+  it('names the host when the exception is never closed', () => {
+    const unclosed = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">example.com</domain>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
+`;
+    const problems = checker.checkLocalRelayNetworkSecurityConfig(unclosed);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('example.com');
+  });
+
+  it('fails when a domain is written as an empty element', () => {
+    const bad = LOCAL_RELAY.replace(
+      '<domain includeSubdomains="false">localhost</domain>',
+      '<domain includeSubdomains="false" />',
+    );
+    const problems = checker.checkLocalRelayNetworkSecurityConfig(bad);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('localhost');
   });
 });
 

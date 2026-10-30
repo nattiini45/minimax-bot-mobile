@@ -26,6 +26,46 @@ import { readFileSync } from 'node:fs';
 const LOOPBACK_DOMAINS = ['localhost', '127.0.0.1'];
 
 /**
+ * The opening tags of the domain-configs in a config, with their attributes.
+ *
+ * The opening tags are counted rather than the whole elements on purpose: a
+ * domain-config that is never closed still counts, because Android's schema
+ * gives a domain-config the default `cleartextTrafficPermitted="true"`. An
+ * unterminated one is an exception, and the gate must not overlook it.
+ *
+ * @param {string} xml the config, without its comments
+ * @returns {string[]} the attributes of each opening tag
+ */
+function domainConfigTagsOf(xml) {
+  return [...xml.matchAll(/<domain-config(?![-\w])([^>]*)>/gi)].map(([, attributes]) => attributes);
+}
+
+/**
+ * The domains named in a config, with their attributes.
+ *
+ * @param {string} xml the config, without its comments
+ * @returns {{ value: string, includeSubdomains: boolean }[]}
+ */
+function domainTagsOf(xml) {
+  // The lookahead keeps `<domain-config` out of this: a hyphen is a word
+  // boundary, so `<domain\b` would match it as well.
+  return [...xml.matchAll(/<domain(?![-\w])([^>]*?)\/?>([^<]*)/gi)].map(([, attributes, value]) => ({
+    value: value.trim(),
+    includeSubdomains: /includeSubdomains\s*=\s*"true"/i.test(attributes),
+  }));
+}
+
+/**
+ * The base-configs in a config, with their attributes.
+ *
+ * @param {string} xml the config, without its comments
+ * @returns {string[]} the attributes of each base-config
+ */
+function baseConfigTagsOf(xml) {
+  return [...xml.matchAll(/<base-config(?![-\w])([^>]*?)\/?>/gi)].map(([, attributes]) => attributes);
+}
+
+/**
  * The problems with the configuration the release build ships.
  *
  * @param {string} netconf the generated `network_security_config.xml` of the main source set
@@ -40,11 +80,11 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
 
   // The release build may not permit cleartext anywhere, so it may not carry a
   // domain-config at all: every one of them is an exception.
-  const domainConfigs = [...xml.matchAll(/<domain-config\b([^>]*)>([\s\S]*?)<\/domain-config>/g)];
+  const domainConfigs = domainConfigTagsOf(xml);
   if (domainConfigs.length > 0) {
-    const hosts = domainConfigs.flatMap(([, , body]) =>
-      [...body.matchAll(/<domain\b([^>]*)>([^<]*)<\/domain>/g)].map(([, , value]) => value.trim()),
-    );
+    const hosts = domainTagsOf(xml)
+      .map((domain) => domain.value)
+      .filter((value) => value.length > 0);
     problems.push(
       hosts.length > 0
         ? `the release config permits cleartext for ${hosts.join(', ')}`
@@ -52,26 +92,26 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
     );
   }
 
-  const baseConfigs = [...xml.matchAll(/<base-config\b([^>]*?)\/?>/g)];
+  const baseConfigs = baseConfigTagsOf(xml);
   if (baseConfigs.length !== 1) {
     problems.push(`expected exactly one base-config, found ${baseConfigs.length}`);
   }
-  for (const [, attributes] of baseConfigs) {
-    if (!/cleartextTrafficPermitted="false"/.test(attributes)) {
+  for (const attributes of baseConfigs) {
+    if (!/cleartextTrafficPermitted\s*=\s*"false"/i.test(attributes)) {
       problems.push('the base-config does not forbid cleartext');
     }
   }
-  if (/cleartextTrafficPermitted="true"/.test(xml)) {
+  if (/cleartextTrafficPermitted\s*=\s*"true"/i.test(xml)) {
     problems.push('cleartext is permitted');
   }
 
-  if (!/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifest)) {
+  if (!/android:networkSecurityConfig\s*=\s*"@xml\/network_security_config"/.test(manifest)) {
     problems.push('the manifest does not point at the network security config');
   }
   // The manifest attribute is ignored on Android 7 and above while a network
   // security config is present, but a manifest that permits cleartext is a
   // manifest that stops being safe the day the config goes missing.
-  if (/android:usesCleartextTraffic="true"/.test(manifest)) {
+  if (/android:usesCleartextTraffic\s*=\s*"true"/.test(manifest)) {
     problems.push('the manifest permits cleartext');
   }
 
@@ -88,7 +128,7 @@ export function checkLocalRelayNetworkSecurityConfig(netconf) {
   const problems = [];
   const xml = netconf.replace(/<!--[\s\S]*?-->/g, '');
 
-  const domainConfigs = [...xml.matchAll(/<domain-config\b([^>]*)>([\s\S]*?)<\/domain-config>/g)];
+  const domainConfigs = domainConfigTagsOf(xml);
   if (domainConfigs.length !== 1) {
     problems.push(`expected exactly one domain-config, found ${domainConfigs.length}`);
   }
@@ -98,46 +138,47 @@ export function checkLocalRelayNetworkSecurityConfig(netconf) {
     );
   }
 
-  for (const [, attributes, body] of domainConfigs) {
-    if (!/cleartextTrafficPermitted="true"/.test(attributes)) {
+  for (const attributes of domainConfigs) {
+    if (!/cleartextTrafficPermitted\s*=\s*"true"/i.test(attributes)) {
       problems.push('the domain-config does not permit cleartext');
-    }
-    const domains = [...body.matchAll(/<domain\b([^>]*)>([^<]*)<\/domain>/g)].map(
-      ([, domainAttributes, value]) => ({
-        value: value.trim(),
-        includeSubdomains: /includeSubdomains="true"/.test(domainAttributes),
-      }),
-    );
-    const names = domains.map((domain) => domain.value);
-    for (const expected of LOOPBACK_DOMAINS) {
-      if (!names.includes(expected)) {
-        problems.push(`the cleartext exception does not cover ${expected}`);
-      }
-    }
-    for (const domain of domains) {
-      if (!LOOPBACK_DOMAINS.includes(domain.value)) {
-        problems.push(
-          `the cleartext exception covers ${domain.value}, which is not the loopback interface`,
-        );
-      }
-      if (domain.includeSubdomains) {
-        problems.push(
-          `the cleartext exception covers the subdomains of ${domain.value}`,
-        );
-      }
     }
   }
 
-  const baseConfigs = [...xml.matchAll(/<base-config\b([^>]*?)\/?>/g)];
+  // Every domain the config names is counted, not only the ones inside a
+  // well-formed domain-config: a domain that no closing tag pairs with is
+  // still a host the exception covers.
+  const domains = domainTagsOf(xml);
+  const names = domains.map((domain) => domain.value);
+  for (const expected of LOOPBACK_DOMAINS) {
+    if (!names.includes(expected)) {
+      problems.push(`the cleartext exception does not cover ${expected}`);
+    }
+  }
+  for (const domain of domains) {
+    if (!LOOPBACK_DOMAINS.includes(domain.value)) {
+      problems.push(
+        `the cleartext exception covers ${domain.value || 'a domain with no host'}, which is not the loopback interface`,
+      );
+    }
+    if (domain.includeSubdomains) {
+      problems.push(`the cleartext exception covers the subdomains of ${domain.value}`);
+    }
+  }
+
+  const baseConfigs = baseConfigTagsOf(xml);
   if (baseConfigs.length !== 1) {
     problems.push(`expected exactly one base-config, found ${baseConfigs.length}`);
   }
-  for (const [, attributes] of baseConfigs) {
-    if (!/cleartextTrafficPermitted="false"/.test(attributes)) {
+  for (const attributes of baseConfigs) {
+    if (!/cleartextTrafficPermitted\s*=\s*"false"/i.test(attributes)) {
       problems.push('the base-config does not forbid cleartext');
     }
   }
-  if (/cleartextTrafficPermitted="true"/.test(xml.replace(/<domain-config\b[^>]*>/g, ''))) {
+  // What is left after the exception is taken out must not permit cleartext
+  // either. A domain-config that is never closed leaves its own attribute
+  // behind, and it is reported rather than overlooked.
+  const outsideTheException = xml.replace(/<domain-config\b[^>]*>[\s\S]*?<\/domain-config>/gi, '');
+  if (/cleartextTrafficPermitted\s*=\s*"true"/i.test(outsideTheException)) {
     problems.push('cleartext is permitted outside the loopback exception');
   }
 
