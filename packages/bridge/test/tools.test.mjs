@@ -180,7 +180,12 @@ test('the gateway reports an unavailable team instead of throwing', async () => 
 
   assert.equal(gateway.available, false);
   assert.equal(gateway.catalog.length, 0);
-  assert.match(gateway.reason, /MCP_SERVER_LIST_FAILED/);
+  // The room is told a sentence, not the Host's own text: this travels to every phone
+  // in the account.
+  assert.doesNotMatch(gateway.reason, /MCP_SERVER_LIST_FAILED/);
+  assert.match(gateway.reason, /could not be read/i);
+  // The detail is kept for the desktop.
+  assert.equal(gateway.detail, 'MCP_SERVER_LIST_FAILED');
 });
 
 test('the gateway reports a missing tool grant', async () => {

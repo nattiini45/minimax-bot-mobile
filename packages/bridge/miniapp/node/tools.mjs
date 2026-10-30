@@ -10,6 +10,14 @@
 
 const TEAM_SERVER_HINT = 'minimax-bot';
 
+/**
+ * What the room is told when the team tools cannot be read.
+ *
+ * A fixed sentence, because this travels to every phone in the account and the Host's
+ * own error text can name internal paths, tool identifiers and host-side detail.
+ */
+const TEAM_UNREADABLE = 'The @minimax-bot team tools could not be read. Open MiniMax Bot on this desktop to try again.';
+
 /** Candidate property names for each operation field, most likely first. */
 const ALIASES = {
   botId: ['botId', 'bot_id', 'target_bot', 'to', 'target', 'targetBotId', 'bot'],
@@ -513,7 +521,23 @@ export class ToolGateway {
     this.catalog = [];
     this.partial = false;
     this.available = false;
+    /**
+     * The sentence the room is told.
+     *
+     * It is a fixed sentence and not the Host's own error text: this travels to every
+     * phone in the account, and the Host's message can name internal paths, tool
+     * identifiers and host-side detail that the phone's users did not need to see.
+     * The detail is kept in `detail` for the desktop.
+     *
+     * @type {string | undefined}
+     */
     this.reason = undefined;
+    /**
+     * The detail behind the sentence, for the desktop's own logs and surface.
+     *
+     * @type {string | undefined}
+     */
+    this.detail = undefined;
   }
 
   /** Reads the live tool catalogue. Never throws: an unavailable team is a state, not a crash. */
@@ -522,6 +546,7 @@ export class ToolGateway {
     if (!tool || typeof tool.list !== 'function') {
       this.available = false;
       this.reason = 'This Mini App was not granted tool access.';
+      this.detail = undefined;
       this.catalog = [];
       return this;
     }
@@ -533,10 +558,15 @@ export class ToolGateway {
       this.reason = this.available
         ? undefined
         : 'The @minimax-bot team is not running. Open MiniMax Bot on this desktop to link it.';
+      this.detail = undefined;
     } catch (error) {
       this.available = false;
       this.catalog = [];
-      this.reason = error instanceof Error ? error.message : 'The team tool catalogue could not be read.';
+      this.detail = error instanceof Error ? error.message : String(error);
+      this.reason = TEAM_UNREADABLE;
+      // The detail is written down here, on the desktop, where the person who can do
+      // something about it will find it.
+      this.context.logger?.warn?.('the team tool catalogue could not be read', { message: this.detail });
     }
     return this;
   }

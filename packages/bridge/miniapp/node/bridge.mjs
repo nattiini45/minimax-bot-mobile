@@ -261,6 +261,16 @@ const SNAPSHOT_RETRIES = 12;
 /** The gap between two snapshot attempts. */
 const SNAPSHOT_RETRY_MS = 1500;
 
+/**
+ * What the room is told when the team roster cannot be read.
+ *
+ * A fixed sentence, because this travels to every phone in the room and the Host's own
+ * error text can name internal paths, tool identifiers and host-side detail. The
+ * detail is logged on the desktop and kept for the surface.
+ */
+const TEAM_ROSTER_UNREADABLE =
+  'The team roster could not be read. Open MiniMax Bot on this desktop to try again.';
+
 export class Bridge {
   /**
    * @param {any} context The Mini App context the Host supplies.
@@ -312,6 +322,12 @@ export class Bridge {
     this.opCache = new Map();
     /** @type {string | undefined} */
     this.snapshotError = undefined;
+    /**
+     * The detail behind the sentence the room was told.
+     *
+     * @type {string | undefined}
+     */
+    this.snapshotErrorDetail = undefined;
     /** @type {number} */
     this.snapshotAttempts = 0;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -407,9 +423,11 @@ export class Bridge {
       return true;
     } catch (error) {
       // The reason travels with the diagnostics, so the phone can say what is wrong
-      // instead of showing an empty team with no explanation.
-      this.snapshotError = error instanceof Error ? error.message : String(error);
-      this.logger.warn('team snapshot failed', { message: this.snapshotError });
+      // instead of showing an empty team with no explanation. It is a fixed sentence:
+      // the detail is for the desktop, not for every phone in the room.
+      this.snapshotError = TEAM_ROSTER_UNREADABLE;
+      this.snapshotErrorDetail = error instanceof Error ? error.message : String(error);
+      this.logger.warn('team snapshot failed', { message: this.snapshotErrorDetail });
       this.emit('evt.bridge_status', {
         desktopOnline: true,
         agentAvailable: this.runner.available,
@@ -816,7 +834,22 @@ export class Bridge {
       toolCount: this.tools.catalog.length,
       partial: this.tools.partial,
       linkedAt: this.linkedAt,
+      // A fixed sentence, never the Host's own error text: this travels to every
+      // phone in the room.
       reason: this.snapshotError ?? this.tools.reason,
+    };
+  }
+
+  /**
+   * The diagnostics for the desktop's own surface.
+   *
+   * The surface is behind the surface secret and is read by the person sitting at the
+   * desktop, so it is where the detail belongs.
+   */
+  desktopDiagnostics() {
+    return {
+      ...this.diagnostics(),
+      detail: this.snapshotErrorDetail ?? this.tools.detail,
     };
   }
 

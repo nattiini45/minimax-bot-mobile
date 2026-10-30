@@ -155,7 +155,9 @@ export async function handle(request, response, deps) {
       relayConnected: bridge.relay.connected,
       relayUrl: config.relayUrl,
       accountId: config.accountId,
-      diagnostics: bridge.diagnostics(),
+      // The surface is behind the surface secret and is read at the desktop, so it is
+      // where the detail behind a failure belongs. The room gets a fixed sentence.
+      diagnostics: bridge.desktopDiagnostics(),
       pending: bridge.pending.list().length,
     });
   }
@@ -215,7 +217,7 @@ export async function handle(request, response, deps) {
     const team = await bridge.readTeam();
     return json(response, 200, {
       ...team,
-      diagnostics: bridge.diagnostics(),
+      diagnostics: bridge.desktopDiagnostics(),
       tools: bridge.tools.catalog,
     });
   }
