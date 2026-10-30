@@ -22,6 +22,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
 const LOOPBACK_DOMAINS = ['localhost', '127.0.0.1'];
 
@@ -200,12 +201,12 @@ function readOrNull(path) {
 }
 
 function main() {
-  const [releasePath, manifestPath, debugPath] = process.argv.slice(2);
-  if (!releasePath || !manifestPath || !debugPath) {
+  const [releasePath, manifestPath, ...developmentPaths] = process.argv.slice(2);
+  if (!releasePath || !manifestPath || developmentPaths.length === 0) {
     console.error(
       'Usage: node scripts/check-network-security-config.mjs ' +
         '<release-network_security_config.xml> <AndroidManifest.xml> ' +
-        '<debug-network_security_config.xml>',
+        '<development-network_security_config.xml> [...]',
     );
     process.exit(2);
   }
@@ -214,7 +215,6 @@ function main() {
 
   const release = readOrNull(releasePath);
   const manifest = readOrNull(manifestPath);
-  const debug = readOrNull(debugPath);
 
   if (release === null) {
     problems.push(`the release network security config is missing (${releasePath})`);
@@ -226,11 +226,19 @@ function main() {
     }
   }
 
-  if (debug === null) {
-    problems.push(`the debug network security config is missing (${debugPath})`);
-  } else {
-    for (const problem of checkLocalRelayNetworkSecurityConfig(debug)) {
-      problems.push(`debug: ${problem}`);
+  // Every development variant has to keep the exception, or a relay on the
+  // developer's own machine is out of reach in that build.
+  for (const path of developmentPaths) {
+    // The source set is what the message should name: the file sits in
+    // `<source set>/res/xml/`.
+    const label = basename(dirname(dirname(dirname(path))));
+    const config = readOrNull(path);
+    if (config === null) {
+      problems.push(`the ${label} network security config is missing (${path})`);
+      continue;
+    }
+    for (const problem of checkLocalRelayNetworkSecurityConfig(config)) {
+      problems.push(`${label}: ${problem}`);
     }
   }
 
@@ -242,7 +250,7 @@ function main() {
     process.exit(1);
   }
   console.log(
-    'the release build forbids cleartext, and the debug build permits it on the loopback interface only',
+    'the release build forbids cleartext, and the development builds permit it on the loopback interface only',
   );
 }
 

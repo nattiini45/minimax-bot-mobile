@@ -89,25 +89,28 @@ echo "=== prebuild the native project ==="
 # plugin out of the APK, which is how a stale bundle once shipped.
 (cd "$BUILD_DIR/apps/app" && npx expo prebuild --platform android --no-install)
 
-echo "=== the release build may not speak cleartext; the debug build may, on the loopback only ==="
+echo "=== the release build may not speak cleartext; the development builds may, on the loopback only ==="
 # The release build ships the main source set's config, which forbids cleartext
-# outright. The debug build ships the debug source set's copy of the same
-# resource, which keeps the loopback exception so that a relay running on the
-# developer's own machine is still reachable. Android merges the build-type
-# source set over the main one, so the release APK never sees the exception.
+# outright. The development builds ship the debug and debugOptimized source
+# sets' copies of the same resource, which keep the loopback exception so that
+# a relay running on the developer's own machine is still reachable. Android
+# merges the build-type source set over the main one, so the release APK never
+# sees the exception.
 NETCONF="$BUILD_DIR/apps/app/android/app/src/main/res/xml/network_security_config.xml"
 DEBUG_NETCONF="$BUILD_DIR/apps/app/android/app/src/debug/res/xml/network_security_config.xml"
+DEBUG_OPTIMIZED_NETCONF="$BUILD_DIR/apps/app/android/app/src/debugOptimized/res/xml/network_security_config.xml"
 MANIFEST="$BUILD_DIR/apps/app/android/app/src/main/AndroidManifest.xml"
 cat "$NETCONF"
 cat "$DEBUG_NETCONF"
+cat "$DEBUG_OPTIMIZED_NETCONF"
 grep -o 'android:networkSecurityConfig="[^"]*"' "$MANIFEST"
 
 # Assert the invariant rather than print it. A gate that only prints is not a
 # gate: the build has to fail when the generated release config lets cleartext
-# out anywhere, and when the generated debug config has lost the loopback
+# out anywhere, and when a generated development config has lost the loopback
 # exception the local-relay workflow needs.
 node "$SOURCE_DIR/scripts/check-network-security-config.mjs" \
-  "$NETCONF" "$MANIFEST" "$DEBUG_NETCONF"
+  "$NETCONF" "$MANIFEST" "$DEBUG_NETCONF" "$DEBUG_OPTIMIZED_NETCONF"
 
 echo "=== assembleRelease ==="
 cd "$BUILD_DIR/apps/app/android"

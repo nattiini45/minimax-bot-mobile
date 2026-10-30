@@ -9,11 +9,13 @@
  * The exception is a development convenience, so it belongs to the development
  * build only:
  *
- *   - `src/main` carries the strict configuration. Every build that is not a debug
- *     build — the release APK among them — forbids cleartext outright, so the
- *     device token can never travel in the clear in a build anybody can install.
- *   - `src/debug` carries the same resource with the loopback exception, so the
- *     debug build can still reach a relay on the developer's own machine.
+ *   - `src/main` carries the strict configuration. Every build that is not a
+ *     development build — the release APK among them — forbids cleartext
+ *     outright, so the device token can never travel in the clear in a build
+ *     anybody can install.
+ *   - `src/debug` and `src/debugOptimized` carry the same resource with the
+ *     loopback exception, so the development builds can still reach a relay on
+ *     the developer's own machine.
  *
  * Android merges the build-type source set over the main one, so the debug build
  * gets the exception and the release build gets the strict configuration. The
@@ -81,10 +83,17 @@ const LOCAL_RELAY_NETWORK_SECURITY_CONFIG = `<?xml version="1.0" encoding="utf-8
  *
  * The order matters: the main source set is the one every build inherits, so it
  * has to hold the strict configuration.
+ *
+ * React Native's Gradle plugin registers a `debugOptimized` build type with a
+ * source set of its own, and that source set does not inherit the debug one.
+ * A build that is optimised for speed is still a development build, so it keeps
+ * the loopback exception as well — without this, a developer who runs the
+ * optimised build cannot reach a relay on their own machine.
  */
 const SOURCE_SETS = [
   { sourceSet: 'main', config: RELEASE_NETWORK_SECURITY_CONFIG },
   { sourceSet: 'debug', config: LOCAL_RELAY_NETWORK_SECURITY_CONFIG },
+  { sourceSet: 'debugOptimized', config: LOCAL_RELAY_NETWORK_SECURITY_CONFIG },
 ];
 
 /**

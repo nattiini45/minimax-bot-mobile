@@ -266,10 +266,12 @@ describe('the config plugin', () => {
       await rm(projectRoot, { recursive: true, force: true });
     });
 
-    it('puts the strict configuration in the main source set and the exception in the debug one', async () => {
+    it('puts the strict configuration in the main source set and the exception in the development ones', async () => {
       const written = await plugin.writeNetworkSecurityConfigs(projectRoot);
 
-      expect(written).toHaveLength(2);
+      // The main source set, the debug one, and the debugOptimized one that
+      // React Native's Gradle plugin registers with a source set of its own.
+      expect(written).toHaveLength(3);
 
       const release = await readFile(
         join(projectRoot, 'app', 'src', 'main', 'res', 'xml', 'network_security_config.xml'),
@@ -279,14 +281,28 @@ describe('the config plugin', () => {
         join(projectRoot, 'app', 'src', 'debug', 'res', 'xml', 'network_security_config.xml'),
         'utf8',
       );
+      const debugOptimized = await readFile(
+        join(
+          projectRoot,
+          'app',
+          'src',
+          'debugOptimized',
+          'res',
+          'xml',
+          'network_security_config.xml',
+        ),
+        'utf8',
+      );
 
       expect(release).toBe(plugin.RELEASE_NETWORK_SECURITY_CONFIG);
       expect(debug).toBe(plugin.LOCAL_RELAY_NETWORK_SECURITY_CONFIG);
+      expect(debugOptimized).toBe(plugin.LOCAL_RELAY_NETWORK_SECURITY_CONFIG);
 
       // The main source set is the one every build inherits, so it is the one
       // that has to forbid cleartext.
       expect(checker.checkNetworkSecurityConfig(release, GOOD_MANIFEST)).toEqual([]);
       expect(checker.checkLocalRelayNetworkSecurityConfig(debug)).toEqual([]);
+      expect(checker.checkLocalRelayNetworkSecurityConfig(debugOptimized)).toEqual([]);
     });
   });
 });

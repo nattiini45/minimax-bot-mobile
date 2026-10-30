@@ -205,12 +205,14 @@ cleartext by default from API 28 onwards. So the two builds differ:
   (`src/main/res/xml/network_security_config.xml`) carries no exception at all,
   so the device token cannot travel in the clear in a build that anybody can
   install.
-- **The debug build keeps the loopback exception.** The same resource in the
-  debug source set (`src/debug/res/xml/network_security_config.xml`) permits
-  cleartext for `localhost` and `127.0.0.1` only. Android merges the build-type
-  source set over the main one, so the debug build gets the exception and the
+- **The development builds keep the loopback exception.** The same resource in
+  the `debug` and `debugOptimized` source sets
+  (`src/debug/res/xml/network_security_config.xml` and
+  `src/debugOptimized/res/xml/network_security_config.xml`) permits cleartext
+  for `localhost` and `127.0.0.1` only. Android merges the build-type source
+  set over the main one, so the development builds get the exception and the
   release build gets the strict configuration. The resource has the same name in
-  both, so the manifest does not have to change.
+  all of them, so the manifest does not have to change.
 
 To reach a relay on your own machine from a device in development:
 
@@ -222,17 +224,17 @@ adb reverse tcp:8787 tcp:8787     # the device's localhost becomes the laptop's
 Then point the phone at `http://localhost:8787`. A release build refuses that
 address at the platform level, which is the point.
 
-The React Native template's debug manifest carries `usesCleartextTraffic="true"`
-so that the debug build can reach the Metro dev server. It does not widen the
-debug build: Android ignores that attribute from API 24 onwards whenever a
+The React Native template's debug manifests carry `usesCleartextTraffic="true"`
+so that the development builds can reach the Metro dev server. It does not
+widen them: Android ignores that attribute from API 24 onwards whenever a
 network security config is present, and this app's `minSdkVersion` is 24. The
-release build does not inherit the debug manifest at all, so it has neither the
+release build does not inherit those manifests at all, so it has neither the
 attribute nor the exception.
 
-The build asserts both configurations rather than printing them:
+The build asserts every configuration rather than printing them:
 `scripts/check-network-security-config.mjs` fails the build when the release
-config would permit cleartext anywhere, and when the debug config has lost the
-loopback exception the local-relay workflow needs.
+config would permit cleartext anywhere, and when a development config has lost
+the loopback exception the local-relay workflow needs.
 
 ## Scripts
 
