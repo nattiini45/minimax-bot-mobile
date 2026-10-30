@@ -116,11 +116,18 @@ node "$SOURCE_DIR/scripts/check-network-security-config.mjs" \
 # merged into the release build over the main one. The generated project is
 # reused between builds, so a config left behind by an earlier one in another
 # source set would reach the release build without the gate seeing it. The
-# project must hold exactly the three the plugin wrote.
-CONFIGS_FOUND="$(find "$BUILD_DIR/apps/app/android/app/src" -name 'network_security_config.xml' | wc -l)"
-if [ "$CONFIGS_FOUND" -ne 3 ]; then
-  echo "the generated Android project holds $CONFIGS_FOUND network security configs, and it must hold exactly 3" >&2
-  find "$BUILD_DIR/apps/app/android/app/src" -name 'network_security_config.xml' >&2
+# project must hold exactly the configs the plugin writes, and no others.
+CONFIGS_EXPECTED="$(printf '%s\n' \
+  'src/debug/res/xml/network_security_config.xml' \
+  'src/debugOptimized/res/xml/network_security_config.xml' \
+  'src/main/res/xml/network_security_config.xml')"
+CONFIGS_FOUND="$(cd "$BUILD_DIR/apps/app/android/app" && find src -name 'network_security_config.xml' | LC_ALL=C sort || true)"
+if [ "$CONFIGS_FOUND" != "$CONFIGS_EXPECTED" ]; then
+  echo "the generated Android project does not hold exactly the network security configs the plugin writes" >&2
+  echo "expected:" >&2
+  echo "$CONFIGS_EXPECTED" >&2
+  echo "found:" >&2
+  echo "$CONFIGS_FOUND" >&2
   exit 1
 fi
 
