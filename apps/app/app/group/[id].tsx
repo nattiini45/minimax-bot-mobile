@@ -6,6 +6,7 @@ import { Avatar } from '../../src/components/Avatar';
 import { Button } from '../../src/components/Button';
 import { Card, EmptyState, Pill, SectionHeader } from '../../src/components/primitives';
 import { tapLight } from '../../src/native/haptics';
+import { botPath, chatPath } from '../../src/nav/paths';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 
@@ -53,7 +54,7 @@ export default function GroupScreen() {
         <Button
           label="Open group chat"
           variant="primary"
-          onPress={() => router.push(`/chat/${encodeURIComponent(`group:${group.groupId}`)}`)}
+          onPress={() => router.push(chatPath(`group:${group.groupId}`))}
         />
       </View>
 
@@ -69,7 +70,7 @@ export default function GroupScreen() {
               accessibilityLabel={member?.name ?? id}
               onPress={() => {
                 tapLight();
-                router.push(`/bot/${id}`);
+                router.push(botPath(id));
               }}
               style={[styles.member, { borderBottomColor: theme.colors.line }]}
             >
