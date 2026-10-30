@@ -23,6 +23,7 @@ import {
   PAIRING_CODE_TTL_MS,
   decodeFrame,
   generatePairingCode,
+  isValidPairingCode,
   issueToken,
   verifyToken,
   type Frame,
@@ -151,12 +152,12 @@ const DEFAULT_RING_CAPACITY = 512;
  * account's. The window is short, because the budget is shared between the owner's
  * phone and whoever is guessing: a long block is a block on the real user.
  *
- * Three codes per fifteen seconds is the same number of tries a minute that the
- * account allowed before, so the owner's phone is not worse off, and the block it can
- * land in is four times shorter.
+ * Three codes every eighteen seconds is the same sustained rate the account allowed
+ * before - ten guesses a minute, in a burst of three rather than a burst of ten - and
+ * the lockout it can land in is a third as long.
  */
 const MAX_PAIR_ATTEMPTS = 3;
-const PAIR_BLOCK_MS = 15 * 1000;
+const PAIR_BLOCK_MS = 18 * 1000;
 
 /**
  * Wrong guesses allowed against one code before that code is refused.
@@ -521,12 +522,18 @@ export class RelaySession {
    */
   private chargeCodeAttempt(code: string): 'blocked' | 'charged' {
     const now = this.now();
+    // Only a code that could be a pairing code is remembered. The key is a string the
+    // caller chose, and a caller that sends a sixteen kilobyte "code" would otherwise
+    // fill the map with sixteen kilobyte keys. A code that could never be right is
+    // charged to the account's budget and forgotten.
+    if (!isValidPairingCode(code)) return 'charged';
     const entry = this.codeAttempts.get(code);
     if (entry && entry.blockedUntil > now) return 'blocked';
     // The first guess at a code is charged to the account, and the code is then
     // refused for the rest of the window: the guesses after it cost the attacker
     // requests and the account nothing.
-    const count = (entry && entry.expiresAt > now ? entry.count : 0) + 1;
+    const used = entry && entry.expiresAt > now ? entry.count : 0;
+    const count = used + 1;
     this.codeAttempts.set(code, {
       count,
       blockedUntil: count >= MAX_CODE_PAIR_ATTEMPTS ? now + CODE_BLOCK_MS : 0,

@@ -67,10 +67,22 @@ describe('the pairing budget', () => {
     }
     expect(refused).toBe(7);
 
-    // The window is fifteen seconds, not a minute.
-    now += 16_000;
+    // The window is eighteen seconds, not a minute.
+    now += 19_000;
     const after = await session.pairDevice('000009', 'device-after', 'Phone', '1.0.0');
     expect(after.code).toBe('PAIRING_CODE_UNKNOWN');
+  });
+
+  it('does not remember a guess that could never be a pairing code', async () => {
+    const session = makeSession();
+
+    // The key of the per-code budgets is a string the caller chose, so only a code
+    // that could be right is remembered: a caller that sends a sixteen kilobyte
+    // "code" would otherwise fill the map with sixteen kilobyte keys.
+    await session.pairDevice('x'.repeat(16 * 1024), 'device-1', 'Phone', '1.0.0');
+
+    const budgets = (session as unknown as { codeAttempts: Map<string, unknown> }).codeAttempts;
+    expect(budgets.size).toBe(0);
   });
 
   it('refuses the account after a flood of different codes, and lets it go again soon', async () => {
@@ -89,7 +101,7 @@ describe('the pairing budget', () => {
     expect(blocked.code).toBe('RATE_LIMITED');
 
     // The window is short: the owner's phone is not locked out for a minute.
-    now += 16_000;
+    now += 19_000;
     const paired = await session.pairDevice(code, 'device-real', 'Phone', '1.0.0');
     expect(paired.ok).toBe(true);
   });

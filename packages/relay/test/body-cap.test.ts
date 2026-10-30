@@ -83,6 +83,21 @@ describe('the pairing body', () => {
     expect(stub.pairDevice).not.toHaveBeenCalled();
   });
 
+  it('is refused with 413 when it declares a length over the limit', async () => {
+    const stub = fakeStub();
+    // A request that says how big it is: the body is refused without being read.
+    const request = new Request(`https://relay.example/r/${ACCOUNT}/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': '999999' },
+      body: JSON.stringify({ code: '123456', deviceId: 'device-1' }),
+    });
+
+    const response = await worker.fetch(request, envWith(stub));
+
+    expect(response.status).toBe(413);
+    expect(stub.pairDevice).not.toHaveBeenCalled();
+  });
+
   it('is read when it is small enough', async () => {
     const stub = fakeStub();
     const response = await worker.fetch(pairingRequest(64), envWith(stub));
