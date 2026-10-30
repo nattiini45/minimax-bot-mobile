@@ -57,14 +57,18 @@ export function relayWsUrl(url: string): string {
  */
 export function relayOrigin(url: string): string {
   const http = relayHttpUrl(url).trim().replace(/\/+$/, '');
-  const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/\s]+)/i.exec(http);
+  const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/\s?#]+)/i.exec(http);
   if (!match) return '';
   const scheme = match[1]!.toLowerCase();
   const authority = match[2]!.toLowerCase();
   // Everything before the last `@` is the userinfo, which the host does not include.
   const at = authority.lastIndexOf('@');
-  const host = at >= 0 ? authority.slice(at + 1) : authority;
+  let host = at >= 0 ? authority.slice(at + 1) : authority;
   if (!host) return '';
+  // A default port is not part of an origin either: `https://relay.example:443` and
+  // `https://relay.example` are one relay, and the platform says so.
+  const defaultPort = scheme === 'https:' || scheme === 'wss:' ? ':443' : ':80';
+  if (host.endsWith(defaultPort)) host = host.slice(0, -defaultPort.length);
   return `${scheme}//${host}`;
 }
 
