@@ -112,6 +112,18 @@ grep -o 'android:networkSecurityConfig="[^"]*"' "$MANIFEST"
 node "$SOURCE_DIR/scripts/check-network-security-config.mjs" \
   "$NETCONF" "$MANIFEST" "$DEBUG_NETCONF" "$DEBUG_OPTIMIZED_NETCONF"
 
+# The gate reads the source sets, and a source set of the build type's own is
+# merged into the release build over the main one. The generated project is
+# reused between builds, so a config left behind by an earlier one in another
+# source set would reach the release build without the gate seeing it. The
+# project must hold exactly the three the plugin wrote.
+CONFIGS_FOUND="$(find "$BUILD_DIR/apps/app/android/app/src" -name 'network_security_config.xml' | wc -l)"
+if [ "$CONFIGS_FOUND" -ne 3 ]; then
+  echo "the generated Android project holds $CONFIGS_FOUND network security configs, and it must hold exactly 3" >&2
+  find "$BUILD_DIR/apps/app/android/app/src" -name 'network_security_config.xml' >&2
+  exit 1
+fi
+
 echo "=== assembleRelease ==="
 cd "$BUILD_DIR/apps/app/android"
 ./gradlew assembleRelease \
