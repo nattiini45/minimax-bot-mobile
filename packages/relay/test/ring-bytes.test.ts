@@ -55,7 +55,7 @@ describe('the replay buffer', () => {
   });
 
   it('forgets the bytes it has evicted', () => {
-    const ring = new SeqRing(2);
+    const ring = new SeqRing(2, 400);
     ring.push(1, 'x'.repeat(100));
     ring.push(2, 'y'.repeat(100));
     expect(ring.byteSize).toBe(200);
@@ -67,5 +67,17 @@ describe('the replay buffer', () => {
 
     ring.clear();
     expect(ring.byteSize).toBe(0);
+  });
+
+  it('measures the bytes it evicted on the way out', () => {
+    // The eviction is measured from the entry, not from a counter that drifts.
+    const ring = new SeqRing(2, 1000);
+    ring.push(1, 'x'.repeat(100));
+    ring.push(2, 'y'.repeat(100));
+    expect(ring.byteSize).toBe(200);
+
+    ring.push(3, 'z'.repeat(100));
+    expect(ring.byteSize).toBe(200);
+    expect(ring.since(0).entries.map((entry) => entry.seq)).toEqual([2, 3]);
   });
 });

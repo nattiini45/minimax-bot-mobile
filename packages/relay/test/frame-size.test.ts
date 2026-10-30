@@ -68,7 +68,7 @@ describe('a frame that is too large', () => {
       ts: 1,
       type: 'evt.team_snapshot',
       source: 'bridge',
-      payload: { filler: 'x'.repeat(300 * 1024) },
+      payload: { filler: 'x'.repeat(600 * 1024) },
     });
 
     session.handleFrame(peer, raw);
@@ -90,7 +90,7 @@ describe('a frame that is too large', () => {
       ts: 1,
       type: 'evt.team_snapshot',
       source: 'bridge',
-      payload: { filler: '\u4f60'.repeat(100 * 1024) },
+      payload: { filler: '\u4f60'.repeat(200 * 1024) },
     });
 
     session.handleFrame(peer, raw);
@@ -116,5 +116,55 @@ describe('a frame that is too large', () => {
 
     expect(deviceSocket.sent).toHaveLength(1);
     expect(session.lastSeq).toBe(1);
+  });
+
+  it('is refused exactly at the cap and accepted just under it', async () => {
+    const { session, deviceSocket } = await connected();
+    const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: new FakeSocket() };
+
+    // The cap is 512 KB. A frame that is exactly that long is over it, because the
+    // envelope around the payload is part of the frame.
+    const over = JSON.stringify({
+      v: 1,
+      id: 'f1',
+      ts: 1,
+      type: 'evt.team_snapshot',
+      source: 'bridge',
+      payload: { filler: 'x'.repeat(512 * 1024) },
+    });
+    session.handleFrame(peer, over);
+    expect(deviceSocket.sent).toHaveLength(0);
+    expect(session.lastSeq).toBe(0);
+
+    // A frame that is a little under it goes through.
+    const under = JSON.stringify({
+      v: 1,
+      id: 'f2',
+      ts: 1,
+      type: 'evt.team_snapshot',
+      source: 'bridge',
+      payload: { filler: 'x'.repeat(500 * 1024) },
+    });
+    session.handleFrame(peer, under);
+    expect(deviceSocket.sent).toHaveLength(1);
+    expect(session.lastSeq).toBe(1);
+  });
+
+  it('is counted, so that a frame that never arrived can be accounted for', async () => {
+    const { session, deviceSocket } = await connected();
+    const peer = { id: 'b1', role: 'bridge' as const, subject: 'bridge-1', socket: new FakeSocket() };
+
+    const raw = JSON.stringify({
+      v: 1,
+      id: 'f1',
+      ts: 1,
+      type: 'evt.team_snapshot',
+      source: 'bridge',
+      payload: { filler: 'x'.repeat(600 * 1024) },
+    });
+    session.handleFrame(peer, raw);
+
+    const status = await session.status();
+    expect(status.droppedFrames).toBe(1);
   });
 });

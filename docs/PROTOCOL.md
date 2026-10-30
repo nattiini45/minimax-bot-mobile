@@ -155,9 +155,16 @@ The bridge observes the agent's own event union and maps it one to one:
 ## Sequencing, resume and idempotency
 
 **Sequencing.** The relay stamps a monotonic `seq` on every `evt.*` frame it forwards
-from the bridge, and buffers the tail in a ring (512 entries by default). A client
-applies a frame only when `seq > lastApplied`, so a duplicate or an out-of-order
-delivery is a no-op.
+from the bridge, and buffers the tail in a ring (512 entries and 4 MB by default, so
+the buffer's memory is bounded whichever of the two runs out first). A client applies a
+frame only when `seq > lastApplied`, so a duplicate or an out-of-order delivery is a
+no-op.
+
+**Frame size.** A frame larger than 512 KB is dropped before it is parsed, and the
+count of dropped frames is reported in the account's status. The limit is generous on
+purpose: the largest frame the bridge sends is the team snapshot with the whole tool
+catalogue in it, and dropping a legitimate frame would leave a phone looking at an
+empty team with nothing to say why.
 
 **Resume.** The device's WebSocket query carries `lastSeq`. On connect the relay
 replays everything after that point. If the device fell behind the ring, the reply
