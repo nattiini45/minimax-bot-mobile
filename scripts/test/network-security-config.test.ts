@@ -117,19 +117,40 @@ describe('the network security config the release build ships', () => {
     expect(problems.join(' ')).toContain('example.com');
   });
 
-  it('names the host when the tags are written in another case', () => {
+  it('fails when the config is written in a case the platform cannot read', () => {
+    // The platform matches element names exactly. A config in another case is
+    // a config the platform does not honour, so the gate may not bless it.
     const otherCase = `<?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <DOMAIN-CONFIG cleartextTrafficPermitted="true">
-        <DOMAIN includeSubdomains="false">example.com</DOMAIN>
-    </DOMAIN-CONFIG>
     <BASE-CONFIG cleartextTrafficPermitted="false" />
 </network-security-config>
 `;
     const problems = checker.checkNetworkSecurityConfig(otherCase, GOOD_MANIFEST);
 
     expect(problems.length).toBeGreaterThan(0);
-    expect(problems.join(' ')).toContain('example.com');
+    expect(problems.join(' ')).toContain('base-config');
+  });
+
+  it('reads a boolean value the way the platform reads it', () => {
+    // `Boolean.parseBoolean` does not care about case, so "FALSE" forbids
+    // cleartext just as "false" does.
+    const shouted = RELEASE.replace(
+      'cleartextTrafficPermitted="false"',
+      'cleartextTrafficPermitted="FALSE"',
+    );
+
+    expect(checker.checkNetworkSecurityConfig(shouted, GOOD_MANIFEST)).toEqual([]);
+  });
+
+  it('does not accept an attribute name the platform would not read', () => {
+    const shouted = RELEASE.replace(
+      'cleartextTrafficPermitted',
+      'CLEARTEXTTRAFFICPERMITTED',
+    );
+    const problems = checker.checkNetworkSecurityConfig(shouted, GOOD_MANIFEST);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('forbid cleartext');
   });
 
   it('fails when the manifest names another config', () => {
@@ -215,6 +236,25 @@ describe('the network security config the debug build ships', () => {
 
     expect(problems.length).toBeGreaterThan(0);
     expect(problems.join(' ')).toContain('example.com');
+  });
+
+  it('fails when the config is written in a case the platform cannot read', () => {
+    // The platform would honour nothing in this config, so it would forbid
+    // cleartext everywhere - and the local relay would be out of reach in the
+    // development build. The gate has to notice.
+    const otherCase = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <DOMAIN-CONFIG cleartextTrafficPermitted="true">
+        <DOMAIN includeSubdomains="false">localhost</DOMAIN>
+        <DOMAIN includeSubdomains="false">127.0.0.1</DOMAIN>
+    </DOMAIN-CONFIG>
+    <BASE-CONFIG cleartextTrafficPermitted="false" />
+</network-security-config>
+`;
+    const problems = checker.checkLocalRelayNetworkSecurityConfig(otherCase);
+
+    expect(problems.length).toBeGreaterThan(0);
+    expect(problems.join(' ')).toContain('loopback');
   });
 
   it('fails when a domain is written as an empty element', () => {

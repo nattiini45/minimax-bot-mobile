@@ -2,23 +2,31 @@
 /**
  * Checks the network security configs the Android build generated.
  *
- * There are two of them, and they carry different invariants:
+ * There are several of them, and they carry different invariants:
  *
  *   - The **release** configuration (`src/main`) may not permit cleartext at all.
  *     A relay on the developer's own machine is a development convenience, and
  *     the credential that rides over it — the device token — must never travel in
  *     the clear in a build that anybody can install.
- *   - The **debug** configuration (`src/debug`) permits cleartext on the loopback
- *     interface and nowhere else, so the local-relay workflow keeps working.
+ *   - The **development** configurations (`src/debug`, `src/debugOptimized`) permit
+ *     cleartext on the loopback interface and nowhere else, so the local-relay
+ *     workflow keeps working.
  *
  * A gate that only prints what it found is not a gate, so this fails the build
- * when the release configuration would let cleartext out anywhere, and when the
+ * when the release configuration would let cleartext out anywhere, and when a
  * development configuration has lost the exception it is supposed to carry.
+ *
+ * **The gate reads the config the way Android reads it.** The platform's parser
+ * matches element and attribute names exactly, so this does too: a config
+ * written in a case the platform cannot read is not a config the platform
+ * honours, and a gate that counted it would be claiming something it cannot
+ * back. Boolean values are compared the way `Boolean.parseBoolean` compares
+ * them, which is without regard to case.
  *
  * Usage:
  *   node scripts/check-network-security-config.mjs \
  *     <release-network_security_config.xml> <AndroidManifest.xml> \
- *     <debug-network_security_config.xml>
+ *     <development-network_security_config.xml> [...]
  */
 
 import { readFileSync } from 'node:fs';
@@ -27,18 +35,43 @@ import { basename, dirname } from 'node:path';
 const LOOPBACK_DOMAINS = ['localhost', '127.0.0.1'];
 
 /**
- * The opening tags of the domain-configs in a config, with their attributes.
+ * The elements of a config, with their names and attributes.
  *
- * The opening tags are counted rather than the whole elements on purpose: a
- * domain-config that is never closed still counts, because Android's schema
- * gives a domain-config the default `cleartextTrafficPermitted="true"`. An
- * unterminated one is an exception, and the gate must not overlook it.
+ * The names are matched exactly, the way the platform's parser matches them.
  *
  * @param {string} xml the config, without its comments
- * @returns {string[]} the attributes of each opening tag
+ * @returns {{ name: string, attributes: string }[]}
  */
-function domainConfigTagsOf(xml) {
-  return [...xml.matchAll(/<domain-config(?![-\w])([^>]*)>/gi)].map(([, attributes]) => attributes);
+function elementsOf(xml) {
+  return [...xml.matchAll(/<([\w:.-]+)((?:[^>"']|"[^"]*"|'[^']*')*?)\/?>/g)].map(
+    ([, name, attributes]) => ({ name, attributes }),
+  );
+}
+
+/**
+ * The value of an attribute in a tag's attributes, or `null` when the tag does
+ * not carry it.
+ *
+ * The name is matched exactly, because the platform matches attribute names
+ * exactly too.
+ *
+ * @param {string} attributes the attributes of one element
+ * @param {string} name the attribute to look for
+ * @returns {string | null}
+ */
+function attributeValue(attributes, name) {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*"([^"]*)"`).exec(attributes);
+  return match ? match[1] : null;
+}
+
+/**
+ * Whether an element permits cleartext, the way the platform reads it.
+ *
+ * @param {string} attributes the attributes of one element
+ * @returns {boolean}
+ */
+function permitsCleartext(attributes) {
+  return attributeValue(attributes, 'cleartextTrafficPermitted')?.toLowerCase() === 'true';
 }
 
 /**
@@ -47,23 +80,16 @@ function domainConfigTagsOf(xml) {
  * @param {string} xml the config, without its comments
  * @returns {{ value: string, includeSubdomains: boolean }[]}
  */
-function domainTagsOf(xml) {
+function domainsOf(xml) {
   // The lookahead keeps `<domain-config` out of this: a hyphen is a word
   // boundary, so `<domain\b` would match it as well.
-  return [...xml.matchAll(/<domain(?![-\w])([^>]*?)\/?>([^<]*)/gi)].map(([, attributes, value]) => ({
-    value: value.trim(),
-    includeSubdomains: /includeSubdomains\s*=\s*"true"/i.test(attributes),
-  }));
-}
-
-/**
- * The base-configs in a config, with their attributes.
- *
- * @param {string} xml the config, without its comments
- * @returns {string[]} the attributes of each base-config
- */
-function baseConfigTagsOf(xml) {
-  return [...xml.matchAll(/<base-config(?![-\w])([^>]*?)\/?>/gi)].map(([, attributes]) => attributes);
+  return [...xml.matchAll(/<domain(?![-\w])([^>]*?)>([^<]*)/g)].map(
+    ([, attributes, value]) => ({
+      value: value.trim(),
+      includeSubdomains:
+        attributeValue(attributes, 'includeSubdomains')?.toLowerCase() === 'true',
+    }),
+  );
 }
 
 /**
@@ -78,12 +104,13 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
   // The generated file carries a comment explaining itself. It is not part of
   // the config, so it is removed before anything is counted.
   const xml = netconf.replace(/<!--[\s\S]*?-->/g, '');
+  const elements = elementsOf(xml);
 
   // The release build may not permit cleartext anywhere, so it may not carry a
   // domain-config at all: every one of them is an exception.
-  const domainConfigs = domainConfigTagsOf(xml);
+  const domainConfigs = elements.filter((element) => element.name === 'domain-config');
   if (domainConfigs.length > 0) {
-    const hosts = domainTagsOf(xml)
+    const hosts = domainsOf(xml)
       .map((domain) => domain.value)
       .filter((value) => value.length > 0);
     problems.push(
@@ -93,17 +120,19 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
     );
   }
 
-  const baseConfigs = baseConfigTagsOf(xml);
+  const baseConfigs = elements.filter((element) => element.name === 'base-config');
   if (baseConfigs.length !== 1) {
     problems.push(`expected exactly one base-config, found ${baseConfigs.length}`);
   }
-  for (const attributes of baseConfigs) {
-    if (!/cleartextTrafficPermitted\s*=\s*"false"/i.test(attributes)) {
+  for (const element of baseConfigs) {
+    if (attributeValue(element.attributes, 'cleartextTrafficPermitted')?.toLowerCase() !== 'false') {
       problems.push('the base-config does not forbid cleartext');
     }
   }
-  if (/cleartextTrafficPermitted\s*=\s*"true"/i.test(xml)) {
-    problems.push('cleartext is permitted');
+  for (const element of elements) {
+    if (permitsCleartext(element.attributes)) {
+      problems.push('cleartext is permitted');
+    }
   }
 
   if (!/android:networkSecurityConfig\s*=\s*"@xml\/network_security_config"/.test(manifest)) {
@@ -120,16 +149,17 @@ export function checkNetworkSecurityConfig(netconf, manifest) {
 }
 
 /**
- * The problems with the configuration the debug build ships.
+ * The problems with the configuration a development build ships.
  *
- * @param {string} netconf the generated `network_security_config.xml` of the debug source set
+ * @param {string} netconf the generated `network_security_config.xml` of a development source set
  * @returns {string[]}
  */
 export function checkLocalRelayNetworkSecurityConfig(netconf) {
   const problems = [];
   const xml = netconf.replace(/<!--[\s\S]*?-->/g, '');
+  const elements = elementsOf(xml);
 
-  const domainConfigs = domainConfigTagsOf(xml);
+  const domainConfigs = elements.filter((element) => element.name === 'domain-config');
   if (domainConfigs.length !== 1) {
     problems.push(`expected exactly one domain-config, found ${domainConfigs.length}`);
   }
@@ -138,9 +168,8 @@ export function checkLocalRelayNetworkSecurityConfig(netconf) {
       'the development build does not permit cleartext to the loopback interface, so the local relay is out of reach',
     );
   }
-
-  for (const attributes of domainConfigs) {
-    if (!/cleartextTrafficPermitted\s*=\s*"true"/i.test(attributes)) {
+  for (const element of domainConfigs) {
+    if (!permitsCleartext(element.attributes)) {
       problems.push('the domain-config does not permit cleartext');
     }
   }
@@ -148,7 +177,7 @@ export function checkLocalRelayNetworkSecurityConfig(netconf) {
   // Every domain the config names is counted, not only the ones inside a
   // well-formed domain-config: a domain that no closing tag pairs with is
   // still a host the exception covers.
-  const domains = domainTagsOf(xml);
+  const domains = domainsOf(xml);
   const names = domains.map((domain) => domain.value);
   for (const expected of LOOPBACK_DOMAINS) {
     if (!names.includes(expected)) {
@@ -166,20 +195,24 @@ export function checkLocalRelayNetworkSecurityConfig(netconf) {
     }
   }
 
-  const baseConfigs = baseConfigTagsOf(xml);
+  const baseConfigs = elements.filter((element) => element.name === 'base-config');
   if (baseConfigs.length !== 1) {
     problems.push(`expected exactly one base-config, found ${baseConfigs.length}`);
   }
-  for (const attributes of baseConfigs) {
-    if (!/cleartextTrafficPermitted\s*=\s*"false"/i.test(attributes)) {
+  for (const element of baseConfigs) {
+    if (attributeValue(element.attributes, 'cleartextTrafficPermitted')?.toLowerCase() !== 'false') {
       problems.push('the base-config does not forbid cleartext');
     }
   }
-  // What is left after the exception is taken out must not permit cleartext
-  // either. A domain-config that is never closed leaves its own attribute
-  // behind, and it is reported rather than overlooked.
-  const outsideTheException = xml.replace(/<domain-config\b[^>]*>[\s\S]*?<\/domain-config>/gi, '');
-  if (/cleartextTrafficPermitted\s*=\s*"true"/i.test(outsideTheException)) {
+
+  // Nothing outside the one exception may permit cleartext. The platform reads
+  // the attribute on any element it knows, so every element that carries it is
+  // counted, not only the ones in the exception.
+  const permittedElsewhere = elements.filter(
+    (element) =>
+      element.name !== 'domain-config' && permitsCleartext(element.attributes),
+  );
+  if (permittedElsewhere.length > 0) {
     problems.push('cleartext is permitted outside the loopback exception');
   }
 
