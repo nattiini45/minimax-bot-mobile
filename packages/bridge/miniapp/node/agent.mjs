@@ -193,10 +193,15 @@ export class AgentRunner {
     if (!item) {
       throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
+    const claimId = item.claimId;
     // Answering is Host work like a turn is, so it is counted like one.
     if (this.activeRuns >= MAX_CONCURRENT_RUNS) {
-      this.pending?.release(requestId);
+      this.pending?.release(requestId, claimId);
       throw codedError('BUSY', 'Too many turns are already running.', true);
+    }
+    if (!this.context.agent) {
+      this.pending?.release(requestId, claimId);
+      throw codedError('AGENT_UNAVAILABLE', 'The agent is not available on this desktop.', true);
     }
     this.activeRuns += 1;
     try {
@@ -210,7 +215,7 @@ export class AgentRunner {
     } catch (error) {
       // The Host did not take the answer, so the request is still waiting for one and
       // the phone is allowed to give it again.
-      this.pending?.release(requestId);
+      this.pending?.release(requestId, claimId);
       throw error;
     } finally {
       this.activeRuns -= 1;
@@ -224,14 +229,19 @@ export class AgentRunner {
     if (!item) {
       throw codedError('REQUEST_NOT_FOUND', 'That request is no longer waiting for an answer.', false);
     }
+    const claimId = item.claimId;
     if (this.activeRuns >= MAX_CONCURRENT_RUNS) {
-      this.pending?.release(requestId);
+      this.pending?.release(requestId, claimId);
       throw codedError('BUSY', 'Too many turns are already running.', true);
     }
+    if (!this.context.agent) {
+      this.pending?.release(requestId, claimId);
+      throw codedError('AGENT_UNAVAILABLE', 'The agent is not available on this desktop.', true);
+    }
     this.activeRuns += 1;
-    const chatId = this.chatIdForSession(item.sessionId);
-    const controller = new AbortController();
     try {
+      const chatId = this.chatIdForSession(item.sessionId);
+      const controller = new AbortController();
       const result = await this.context.agent.answer(
         { sessionId: item.sessionId, requestId, answers },
         { signal: controller.signal, onEvent: (event) => this.handleAgentEvent(chatId, event, controller) },
@@ -240,7 +250,7 @@ export class AgentRunner {
       this.onEvent('evt.question_answered', { requestId });
       return result;
     } catch (error) {
-      this.pending?.release(requestId);
+      this.pending?.release(requestId, claimId);
       throw error;
     } finally {
       this.activeRuns -= 1;

@@ -20,6 +20,8 @@ async function makeBridge() {
   const dataDir = await mkdtemp(join(tmpdir(), 'bridge-approval-'));
   /** The answers the Host was given. */
   const agentReplies = [];
+  /** The frames the bridge sent to the room. */
+  const sent = [];
   const context = {
     pluginId: 'minimax-bot-bridge',
     pluginRoot: '.',
@@ -59,13 +61,17 @@ async function makeBridge() {
     config: { bridgeId: 'bridge-1', accountId: 'default', bridgeToken: '', relayUrl: '', bridgeName: 'Desk' },
     logger: context.logger,
   });
-  bridge.relay.send = () => true;
+  bridge.relay.send = (frame) => {
+    sent.push(frame);
+    return true;
+  };
 
   await bridge.start();
 
   return {
     bridge,
     agentReplies,
+    sent,
     async dispose() {
       bridge.stop();
       await rm(dataDir, { recursive: true, force: true });
@@ -199,6 +205,89 @@ test('answering counts towards the run ceiling', async () => {
     bridge.runner.activeRuns = 0;
     await bridge.dispatch('op.respond_permission', { requestId: 'req-1', decision: 'allowOnce' });
     assert.equal(agentReplies.length, 1);
+  } finally {
+    await dispose();
+  }
+});
+
+test('the run slot is given back on every path', async () => {
+  const { bridge, dispose } = await makeBridge();
+  try {
+    await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+
+    // The answer succeeds.
+    await bridge.dispatch('op.respond_permission', { requestId: 'req-1', decision: 'allowOnce' });
+    assert.equal(bridge.runner.activeRuns, 0);
+
+    // The answer is refused because the runner is busy.
+    await bridge.dispatch('op.send_message', { chatId: 'bot:b2', text: 'again' });
+    bridge.runner.activeRuns = MAX_CONCURRENT_RUNS;
+    await assert.rejects(() =>
+      within(bridge.dispatch('op.respond_permission', { requestId: 'req-1', decision: 'deny' })),
+    );
+    bridge.runner.activeRuns = 0;
+    assert.equal(bridge.runner.activeRuns, 0);
+  } finally {
+    await dispose();
+  }
+});
+
+test('a request that is being answered is not offered to a phone that reconnects', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
+  try {
+    await bridge.dispatch('op.send_message', { chatId: 'bot:b1', text: 'do it' });
+
+    // The answer is in flight.
+    let release = () => {};
+    const held = new Promise((resolve) => {
+      release = () => resolve();
+    });
+    bridge.context.agent.reply = async () => {
+      await held;
+    };
+    const answering = bridge.dispatch('op.respond_permission', { requestId: 'req-1', decision: 'allowOnce' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A phone reconnects while the answer is in flight.
+    sent.length = 0;
+    bridge.replayPending();
+
+    const reAsked = sent.filter((frame) => frame.type === 'evt.permission_requested');
+    assert.equal(reAsked.length, 0);
+
+    release();
+    await within(answering);
+  } finally {
+    await dispose();
+  }
+});
+
+test('the question path is answered once as well', async () => {
+  const { bridge, sent, dispose } = await makeBridge();
+  try {
+    // A question is waiting.
+    bridge.runner.pending.add('question', { requestId: 'q-1', title: 'Which one?' }, 'sess-1');
+    assert.equal(bridge.pending.size, 1);
+
+    const answers = [];
+    bridge.context.agent.answer = async (payload) => {
+      answers.push(payload);
+      return { sessionId: 'sess-1', status: 'finished' };
+    };
+
+    await bridge.dispatch('op.answer_question', { requestId: 'q-1', answers: [{ questionId: 'a', value: 'b' }] });
+    assert.equal(answers.length, 1);
+
+    // A second answer for the same question is refused.
+    await assert.rejects(
+      () => bridge.dispatch('op.answer_question', { requestId: 'q-1', answers: [] }),
+      (error) => {
+        assert.equal(/** @type {{code?: string}} */ (error).code, 'REQUEST_NOT_FOUND');
+        return true;
+      },
+    );
+    assert.equal(answers.length, 1);
+    assert.equal(bridge.runner.activeRuns, 0);
   } finally {
     await dispose();
   }

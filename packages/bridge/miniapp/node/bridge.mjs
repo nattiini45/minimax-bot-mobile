@@ -373,7 +373,10 @@ export class Bridge {
    * own, and this is the one event that carries the whole team.
    */
   replayPending() {
-    for (const item of this.pending.list()) {
+    // A request that is being answered right now is not waiting for an answer, so it
+    // is not re-emitted: a phone that reconnects must not be shown a request it would
+    // only be allowed to refuse.
+    for (const item of this.pending.listUnclaimed()) {
       if (item.kind === 'permission') {
         this.emit('evt.permission_requested', { request: item.request });
       } else {

@@ -91,6 +91,36 @@ describe('answering a permission request', () => {
     expect(useAppStore.getState().approvals).toHaveLength(0);
   });
 
+  it('gives the decision back when the desktop refuses it', () => {
+    const sent: unknown[] = [];
+    useAppStore.setState({
+      request: ((type: string, payload: unknown) => {
+        sent.push({ type, payload });
+        return 'op-1';
+      }) as never,
+    });
+
+    useAppStore.getState().applyFrame(
+      event('evt.permission_requested', {
+        request: { requestId: 'req-1', toolName: 'shell', reason: 'writes a file' },
+      }),
+    );
+    useAppStore.getState().respondPermission('req-1', 'allowOnce');
+    expect(useAppStore.getState().decided['req-1']).toBe('allowOnce');
+
+    // The desktop refused the answer. The request is still waiting for one, so the
+    // phone has to be able to give it again.
+    useAppStore.getState().applyFrame(
+      event('err', { opId: 'op-1', code: 'BUSY', message: 'Too many turns are already running.' }),
+    );
+
+    expect(useAppStore.getState().decided['req-1']).toBeUndefined();
+
+    // And the phone can answer again.
+    useAppStore.getState().respondPermission('req-1', 'allowOnce');
+    expect(sent).toHaveLength(2);
+  });
+
   it('does not keep the decisions of approvals that are gone', () => {
     useAppStore.getState().applyFrame(
       event('evt.permission_requested', {

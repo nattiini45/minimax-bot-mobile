@@ -102,6 +102,13 @@ export interface AppState {
    * still there after the tap, and a second tap sends a second answer.
    */
   decided: Record<string, string>;
+  /**
+   * The operation each decision was sent with, by request id.
+   *
+   * A decision the desktop refused has to be given back, and the refusal names the
+   * operation and not the request, so the phone needs the link between them.
+   */
+  decidedOps: Record<string, string>;
   questions: AppQuestion[];
   usage: AppUsage | null;
 
@@ -533,6 +540,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   schedules: [],
   approvals: [],
   decided: {},
+  decidedOps: {},
   questions: [],
   usage: null,
 
@@ -715,8 +723,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // the request before it tells the Host, so a second answer for the same request
     // would be refused there; the phone does not send one.
     if (get().decided[requestId]) return;
-    set((state) => ({ decided: { ...state.decided, [requestId]: decision } }));
-    get().request('op.respond_permission', { requestId, decision });
+    const opId = get().request('op.respond_permission', { requestId, decision });
+    set((state) => ({
+      decided: { ...state.decided, [requestId]: decision },
+      decidedOps: { ...state.decidedOps, [requestId]: opId },
+    }));
   },
 
   applyFrame: (frame) => {
@@ -771,6 +782,22 @@ export const useAppStore = create<AppState>((set, get) => ({
           return { pendingOp: next };
         });
         pending.reject(new Error(p.message ?? 'The request failed.'));
+      }
+      // A decision the desktop refused is given back: the request is still waiting
+      // for an answer, and the phone has to be able to give one.
+      if (opId) {
+        set((current) => {
+          const decided = { ...current.decided };
+          const decidedOps = { ...current.decidedOps };
+          let changed = false;
+          for (const [requestId, sentOpId] of Object.entries(decidedOps)) {
+            if (sentOpId !== opId) continue;
+            delete decided[requestId];
+            delete decidedOps[requestId];
+            changed = true;
+          }
+          return changed ? { decided, decidedOps } : current;
+        });
       }
       set({ lastError: p.message ?? 'The request failed.' });
       return;
@@ -987,18 +1014,24 @@ export const useAppStore = create<AppState>((set, get) => ({
         // cannot grow with approvals that are long gone.
         const live = new Set(approvals.map((a) => a.requestId));
         const decided: Record<string, string> = {};
+        const decidedOps: Record<string, string> = {};
         for (const [id, value] of Object.entries(state.decided)) {
-          if (live.has(id)) decided[id] = value;
+          if (!live.has(id)) continue;
+          decided[id] = value;
+          const opId = state.decidedOps[id];
+          if (opId !== undefined) decidedOps[id] = opId;
         }
-        set({ approvals, decided });
+        set({ approvals, decided, decidedOps });
         break;
       }
 
       case 'evt.permission_resolved': {
         const requestId = p.requestId;
         const decided = { ...state.decided };
+        const decidedOps = { ...state.decidedOps };
         delete decided[requestId];
-        set({ approvals: state.approvals.filter((a) => a.requestId !== requestId), decided });
+        delete decidedOps[requestId];
+        set({ approvals: state.approvals.filter((a) => a.requestId !== requestId), decided, decidedOps });
         break;
       }
 

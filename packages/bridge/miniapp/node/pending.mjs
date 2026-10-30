@@ -13,8 +13,10 @@ export class PendingSet {
   constructor({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now() } = {}) {
     this.ttlMs = ttlMs;
     this.now = now;
-    /** @type {Map<string, {kind: 'permission'|'question', request: object, sessionId: string, expiresAt: number, claimed?: boolean}>} */
+    /** @type {Map<string, {kind: 'permission'|'question', request: object, sessionId: string, expiresAt: number, claimed?: boolean, claimId?: number}>} */
     this.items = new Map();
+    /** The token of the last claim, so that no two claims share one. */
+    this.claimCounter = 0;
   }
 
   add(kind, request, sessionId) {
@@ -36,6 +38,10 @@ export class PendingSet {
    * pass the lookup and both reach the Host, and a phone that double-taps the approve
    * button produces two answers rather than one.
    *
+   * The claim carries a token, so that a caller can only give back a claim that is
+   * its own: a request whose id was reused while a claim was in flight would
+   * otherwise be released by the wrong caller.
+   *
    * @param {string} requestId
    * @param {'permission'|'question'} [kind]
    * @returns the claimed item, or undefined when there is nothing to claim
@@ -46,7 +52,9 @@ export class PendingSet {
     if (!item) return undefined;
     if (kind && item.kind !== kind) return undefined;
     if (item.claimed) return undefined;
+    this.claimCounter += 1;
     item.claimed = true;
+    item.claimId = this.claimCounter;
     return item;
   }
 
@@ -57,12 +65,31 @@ export class PendingSet {
    * waiting for one, and the phone is allowed to give it.
    *
    * @param {string} requestId
+   * @param {number} [claimId] the token of the claim being given back
    */
-  release(requestId) {
+  release(requestId, claimId) {
     const item = this.items.get(requestId);
     if (!item) return false;
+    // Only the holder of the claim may give it back.
+    if (claimId !== undefined && item.claimId !== claimId) return false;
     item.claimed = false;
+    item.claimId = undefined;
     return true;
+  }
+
+  /**
+   * The requests that are waiting for an answer.
+   *
+   * A request that is being answered right now is not waiting for one, so it is not
+   * listed: a phone that reconnects must not be shown a request that cannot be
+   * answered.
+   *
+   * @param {'permission'|'question'} [kind]
+   */
+  listUnclaimed(kind) {
+    this.expire();
+    const all = [...this.items.values()].filter((item) => !item.claimed);
+    return kind ? all.filter((item) => item.kind === kind) : all;
   }
 
   resolve(requestId) {
