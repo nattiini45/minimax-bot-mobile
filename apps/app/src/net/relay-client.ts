@@ -19,17 +19,16 @@ export const CLOSE_DEVICE_REVOKED = CLOSE_CODE.deviceRevoked;
 export const CLOSE_REPLACED = CLOSE_CODE.replaced;
 
 /**
- * Whether a failed handshake was a refusal of the credential.
+ * What the ticket request answered.
  *
- * The relay accepts the upgrade and closes the socket with the reason, so this is a
- * safety net for a relay that answers the handshake with an HTTP error instead: React
- * Native does not surface the status code, only the message, so the message is what
- * there is to go on. Without this the phone would retry a credential the relay has
- * already refused, and the user would only ever see "offline".
+ * Three things are possible: there is a ticket, the relay refused the credential, or
+ * there is no ticket to be had. The refusal is the relay's own status and the relay's
+ * own code, so the phone never has to guess it out of a message.
  */
-function looksLikeRefusal(message: string): boolean {
-  return /\b401\b|unauthori[sz]ed|forbidden/i.test(message);
-}
+type TicketOutcome =
+  | { kind: 'ticket'; ticket: string }
+  | { kind: 'refused'; code: string }
+  | { kind: 'none' };
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -63,8 +62,6 @@ export class RelayClient {
   private options: RelayClientOptions;
   /** True once a socket has completed its handshake. */
   private opened = false;
-  /** True when the last handshake failed because the credential was refused. */
-  private refused = false;
   /**
    * Whether a ticket was refused and the token was used instead.
    *
@@ -107,19 +104,29 @@ export class RelayClient {
    * The request carries the token in a header, which is the one place a
    * credential can be kept out of a URL. A relay that does not offer tickets
    * leaves the token where it was.
+   *
+   * A relay that refuses the credential says so with a status and a code of its own,
+   * which is what the phone goes on. A relay that is merely unreachable, or that does
+   * not know the route, is not a refusal: that is a connection to try again.
    */
-  private async fetchTicket(): Promise<string | null> {
+  private async fetchTicket(): Promise<TicketOutcome> {
     const base = relayHttpUrl(this.options.url);
     try {
       const response = await fetch(`${base}/r/${encodeURIComponent(this.options.accountId)}/ws-ticket`, {
         method: 'POST',
         headers: { authorization: `Bearer ${this.options.token}` },
       });
-      if (!response.ok) return null;
-      const body = (await response.json()) as { ticket?: string };
-      return typeof body.ticket === 'string' ? body.ticket : null;
+      if (response.status === 401 || response.status === 403) {
+        return { kind: 'refused', code: 'UNAUTHORIZED' };
+      }
+      if (!response.ok) return { kind: 'none' };
+      const body = (await response.json()) as { ticket?: string; code?: string };
+      if (typeof body.ticket === 'string') return { kind: 'ticket', ticket: body.ticket };
+      // A relay that refuses the credential in the body rather than the status.
+      if (body.code === 'UNAUTHORIZED') return { kind: 'refused', code: body.code };
+      return { kind: 'none' };
     } catch {
-      return null;
+      return { kind: 'none' };
     }
   }
 
@@ -127,16 +134,23 @@ export class RelayClient {
     if (this.closed) return;
     this.setStatus('connecting');
     this.opened = false;
-    this.refused = false;
     // The socket is opened with a ticket when the relay offers one, so the
     // long-lived token does not travel in the URL.
     void this.open();
   }
 
   private async open(): Promise<void> {
-    const ticket = await this.fetchTicket();
+    const outcome = await this.fetchTicket();
     if (this.closed) return;
-    this.openSocket(ticket);
+    if (outcome.kind === 'refused') {
+      // The relay refused this phone, in its own words and with its own status. There
+      // is nothing to retry: the phone has to be paired again.
+      this.closed = true;
+      this.setStatus('offline');
+      this.options.onFatal?.(CLOSE_UNAUTHORIZED);
+      return;
+    }
+    this.openSocket(outcome.kind === 'ticket' ? outcome.ticket : null);
   }
 
   /**
@@ -152,7 +166,6 @@ export class RelayClient {
       // The backoff is only reset once the handshake completes. A relay that accepts the
       // socket and then drops it would otherwise be retried every second, forever.
       this.opened = true;
-      this.refused = false;
       this.setStatus('online');
     };
 
@@ -171,16 +184,10 @@ export class RelayClient {
       this.socket = null;
       this.setStatus('offline');
       if (this.closed) return;
-      // A connection that was refused before it opened, and that carried a
-      // ticket, is tried once more with the token: a relay whose room predates
-      // the ticket does not know what one is.
-      if (!this.opened && ticket && !this.usedTokenFallback) {
-        this.usedTokenFallback = true;
-        this.openSocket(null);
-        return;
-      }
       // A revoked or replaced device must stop trying: reconnecting forever with a
-      // credential the relay has already rejected is a loop the user cannot see.
+      // credential the relay has already rejected is a loop the user cannot see. This
+      // comes before the ticket fallback, because a ticket is made from the same
+      // credential: if the ticket was refused, the token will be refused too.
       if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_DEVICE_REVOKED) {
         this.closed = true;
         this.options.onFatal?.(event.code);
@@ -191,20 +198,21 @@ export class RelayClient {
         this.options.onFatal?.(event.code);
         return;
       }
-      // The handshake never completed and the relay refused the credential outright.
-      if (!this.opened && this.refused) {
-        this.closed = true;
-        this.options.onFatal?.(CLOSE_UNAUTHORIZED);
+      // A connection that was refused before it opened, and that carried a
+      // ticket, is tried once more with the token: a relay whose room predates
+      // the ticket does not know what one is.
+      if (!this.opened && ticket && !this.usedTokenFallback) {
+        this.usedTokenFallback = true;
+        this.openSocket(null);
         return;
       }
       this.scheduleReconnect();
     };
 
-    socket.onerror = (event) => {
-      // `onclose` always follows, so the reconnect is scheduled there. The message is
-      // kept because a refused handshake only says so here.
-      const message = (event as { message?: string })?.message ?? '';
-      if (message) this.refused = looksLikeRefusal(message);
+    socket.onerror = () => {
+      // `onclose` always follows, so the reconnect is scheduled there. An error says
+      // nothing about whether the credential was refused: the relay says that with a
+      // close code, or with the status of the ticket request.
     };
   }
 

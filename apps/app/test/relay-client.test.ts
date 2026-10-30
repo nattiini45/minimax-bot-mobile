@@ -84,9 +84,11 @@ describe('asking for a ticket', () => {
       } as Response;
     }) as unknown as typeof fetch;
 
-    const ticket = await (client() as unknown as { fetchTicket(): Promise<string | null> }).fetchTicket();
+    const outcome = await (
+      client() as unknown as { fetchTicket(): Promise<{ kind: string; ticket?: string }> }
+    ).fetchTicket();
 
-    expect(ticket).toBe('the-ticket');
+    expect(outcome).toEqual({ kind: 'ticket', ticket: 'the-ticket' });
     expect(seen[0]?.url).toBe('https://relay.example.workers.dev/r/default/ws-ticket');
     expect((seen[0]?.init.headers as Record<string, string>).authorization).toBe(
       'Bearer the-device-token',
@@ -98,9 +100,21 @@ describe('asking for a ticket', () => {
       throw new Error('offline');
     });
 
-    const ticket = await (client() as unknown as { fetchTicket(): Promise<string | null> }).fetchTicket();
+    const outcome = await (
+      client() as unknown as { fetchTicket(): Promise<{ kind: string }> }
+    ).fetchTicket();
 
-    expect(ticket).toBeNull();
+    expect(outcome).toEqual({ kind: 'none' });
+  });
+
+  it('is a refusal when the relay says so with a status', async () => {
+    global.fetch = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+
+    const outcome = await (
+      client() as unknown as { fetchTicket(): Promise<{ kind: string }> }
+    ).fetchTicket();
+
+    expect(outcome).toEqual({ kind: 'refused', code: 'UNAUTHORIZED' });
   });
 });
 

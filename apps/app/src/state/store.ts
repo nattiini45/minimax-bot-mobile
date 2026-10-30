@@ -1126,8 +1126,10 @@ export function connectRelay(session: Session): RelayClient {
       );
       useAppStore.getState().setSession(null);
       void persistSession(null);
-      void persistOutbox([]);
-      useAppStore.setState({ outbox: [] });
+      // The queued messages are not thrown away with the session. Every item carries
+      // the account it was composed for, so it is only ever sent into that account's
+      // room: dropping the session says nothing about the conversation the user has
+      // not had yet. Unpairing on purpose still clears them.
     },
   });
   client = instance;
