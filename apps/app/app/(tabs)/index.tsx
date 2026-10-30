@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '../../src/components/Avatar';
 import { Card, EmptyState, Pill, SectionHeader } from '../../src/components/primitives';
+import { botPath, groupPath } from '../../src/nav/paths';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 
@@ -55,7 +56,7 @@ export default function TeamScreen() {
             key={bot.botId}
             accessibilityRole="button"
             accessibilityLabel={bot.name}
-            onPress={() => router.push(`/bot/${bot.botId}`)}
+            onPress={() => router.push(botPath(bot.botId))}
             style={({ pressed }) => [
               styles.row,
               {
@@ -85,7 +86,7 @@ export default function TeamScreen() {
               key={group.groupId}
               accessibilityRole="button"
               accessibilityLabel={group.name}
-              onPress={() => router.push(`/group/${group.groupId}`)}
+              onPress={() => router.push(groupPath(group.groupId))}
               style={({ pressed }) => [
                 styles.row,
                 {

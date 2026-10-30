@@ -18,6 +18,7 @@ import { Bubble } from '../../src/components/Bubble';
 import { EmptyState } from '../../src/components/primitives';
 import { tapLight, tapMedium } from '../../src/native/haptics';
 import { notify } from '../../src/native/notifications';
+import { botPath } from '../../src/nav/paths';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 import type { AppMessage } from '../../src/state/store';
@@ -165,7 +166,7 @@ export default function ChatScreen() {
       {bot ? (
         <Text
           style={[styles.headerLink, { color: theme.colors.muted }]}
-          onPress={() => router.push(`/bot/${bot.botId}`)}
+          onPress={() => router.push(botPath(bot.botId))}
         >
           Bot details
         </Text>

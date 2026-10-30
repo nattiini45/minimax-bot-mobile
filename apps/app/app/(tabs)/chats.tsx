@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '../../src/components/Avatar';
 import { EmptyState, SectionHeader } from '../../src/components/primitives';
+import { chatPath } from '../../src/nav/paths';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 
@@ -43,7 +44,7 @@ export default function ChatsScreen() {
               key={bot.botId}
               accessibilityRole="button"
               accessibilityLabel={`Chat with ${bot.name}`}
-              onPress={() => router.push(`/chat/${encodeURIComponent(chatId)}`)}
+              onPress={() => router.push(chatPath(chatId))}
               style={({ pressed }) => [
                 styles.row,
                 {
@@ -76,7 +77,7 @@ export default function ChatsScreen() {
                 key={group.groupId}
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${group.name}`}
-                onPress={() => router.push(`/chat/${encodeURIComponent(chatId)}`)}
+                onPress={() => router.push(chatPath(chatId))}
                 style={({ pressed }) => [
                   styles.row,
                   {

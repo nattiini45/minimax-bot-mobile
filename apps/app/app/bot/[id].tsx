@@ -6,6 +6,7 @@ import { Avatar } from '../../src/components/Avatar';
 import { Button } from '../../src/components/Button';
 import { Card, EmptyState, Pill, SectionHeader } from '../../src/components/primitives';
 import { tapMedium } from '../../src/native/haptics';
+import { chatPath } from '../../src/nav/paths';
 import { useTheme } from '../../src/theme';
 import { useAppStore } from '../../src/state/store';
 
@@ -64,7 +65,7 @@ export default function BotScreen() {
         <Button
           label="Open chat"
           variant="primary"
-          onPress={() => router.push(`/chat/${encodeURIComponent(`bot:${bot.botId}`)}`)}
+          onPress={() => router.push(chatPath(`bot:${bot.botId}`))}
         />
       </View>
 
