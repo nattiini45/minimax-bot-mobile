@@ -56,6 +56,12 @@ jobs:
           java-version: 17
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list asks for `tools`, which the SDK
+          # repository no longer has - the command line tools are
+          # `cmdline-tools` now, and asking for the old name fails the step
+          # before any of this repository's code runs.
+          packages: 'cmdline-tools;latest' 'platform-tools'
 
       - name: restore the release key
         env:
