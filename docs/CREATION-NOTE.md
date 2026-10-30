@@ -125,6 +125,11 @@ no error frames in the replay**.
   and it checks the certificate of the artefact it produced before the build is
   allowed to pass. The native build needs Linux (RN 0.88 hits the 260-character path
   limit on Windows).
+- A release build may not speak cleartext at all. The network security config it
+  ships forbids it, with no exception for any host, so the device token cannot
+  travel in the clear in a build that anybody can install. The loopback exception
+  a relay on the developer's own machine needs lives in the debug source set
+  only, and the build asserts that it stays there.
 
 ---
 
