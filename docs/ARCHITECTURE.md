@@ -79,7 +79,9 @@ socket registry and the event ring.
 - **Pairing.** The bridge asks for a six digit code (90 s, single use). The phone types
   it; the relay exchanges it for a device token signed with a shared HMAC key.
 - **Fan-out.** The relay stamps a monotonic `seq` on every bridge event and buffers the
-  tail in a ring (512 entries by default).
+  tail in a ring (512 entries and 4 MB by default). A frame larger than 512 KB is
+  dropped before it is parsed, and the count of dropped frames is reported in the
+  account's status.
 - **Resume.** A reconnecting device sends its last `seq`; the relay replays what it
   missed and sets `truncated` when the device fell behind the buffer, which tells the app
   to resynchronise from a full snapshot.

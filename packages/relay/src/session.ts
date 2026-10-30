@@ -32,7 +32,7 @@ import {
   type TokenPayload,
 } from '@minimax-bot/protocol';
 
-import { SeqRing, type RingEntry } from './ring.js';
+import { SeqRing, byteLength, DEFAULT_RING_MAX_BYTES, type RingEntry } from './ring.js';
 
 /**
  * How long a ticket for a single connection is good for.
@@ -84,6 +84,13 @@ export interface PairingCodeRecord {
 export interface SessionOptions {
   secret: string;
   ringCapacity?: number;
+  /**
+   * How many bytes the replay buffer keeps.
+   *
+   * The buffer holds frames, and a frame is whatever the sender produced, so the entry
+   * count alone does not say how much memory the room is holding.
+   */
+  ringMaxBytes?: number;
   deviceTokenTtlMs?: number;
   now?: () => number;
   /**
@@ -140,9 +147,25 @@ export interface SessionStatus {
   deviceCount: number;
   activeDevices: number;
   lastSeq: number;
+  /** How many frames were dropped because they were too large. */
+  droppedFrames: number;
 }
 
 const DEFAULT_RING_CAPACITY = 512;
+
+/**
+ * The largest frame the relay accepts, in bytes.
+ *
+ * A frame is read into the room's memory before it is parsed, and the room is one
+ * Durable Object, so the size of a frame is the size of the room's memory for a moment.
+ * A frame over this is dropped rather than read.
+ *
+ * The limit is generous on purpose: the bridge's frames are not bounded by the limit
+ * on its own local surface, and the largest frame it sends is the team snapshot with
+ * the whole tool catalogue in it. Dropping a legitimate frame would leave the phone
+ * looking at an empty team with nothing to say why.
+ */
+const MAX_FRAME_BYTES = 512 * 1024;
 
 /**
  * Wrong pairing codes allowed per window before the account starts refusing.
@@ -193,6 +216,13 @@ export class RelaySession {
   private failedPairAttempts = 0;
   private pairBlockedUntil = 0;
   /**
+   * How many frames were dropped because they were too large.
+   *
+   * It is reported in the room's status, so that a frame that never arrived can be
+   * accounted for rather than only guessed at.
+   */
+  private droppedFrames = 0;
+  /**
    * Wrong guesses charged to one code.
    *
    * A code that is guessed again and again is charged here and not to the account's
@@ -233,7 +263,10 @@ export class RelaySession {
 
   constructor(options: SessionOptions) {
     this.secret = options.secret;
-    this.ring = new SeqRing(options.ringCapacity ?? DEFAULT_RING_CAPACITY);
+    this.ring = new SeqRing(
+      options.ringCapacity ?? DEFAULT_RING_CAPACITY,
+      options.ringMaxBytes ?? DEFAULT_RING_MAX_BYTES,
+    );
     this.deviceTokenTtlMs = options.deviceTokenTtlMs ?? DEVICE_TOKEN_TTL_MS;
     this.now = options.now ?? (() => Date.now());
     this.storage = options.storage;
@@ -928,6 +961,21 @@ export class RelaySession {
    * monotonic `seq`, buffered, and fanned out to every connected device.
    */
   handleFrame(from: PeerSocket, raw: string): void {
+    // A frame is dropped rather than read when it is larger than the relay accepts.
+    // The frame is read into the room's memory before it is parsed, and the room is one
+    // Durable Object, so the size of a frame is the size of the room's memory for a
+    // moment. The buffer's memory is bounded as well, by an entry count and by a byte
+    // count, but a frame that is kept stays resident until enough later frames push
+    // it out.
+    if (raw.length > MAX_FRAME_BYTES || byteLength(raw) > MAX_FRAME_BYTES) {
+      this.droppedFrames += 1;
+      console.warn('a frame was dropped: it is larger than the relay reads', {
+        bytes: byteLength(raw),
+        limit: MAX_FRAME_BYTES,
+      });
+      return;
+    }
+
     // Every frame a peer sends is checked against the shared contract before the
     // relay acts on it. The relay does not interpret payloads, but it does rely
     // on the envelope: it routes by type, it owns the order, and the bridge
@@ -986,6 +1034,7 @@ export class RelaySession {
       deviceCount: this.devices.size,
       activeDevices,
       lastSeq: this.seq,
+      droppedFrames: this.droppedFrames,
     };
   }
 

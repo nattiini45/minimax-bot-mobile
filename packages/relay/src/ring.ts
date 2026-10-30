@@ -6,6 +6,30 @@
  * everything. This is the same shape as MiniMax's own Remote Control `last_event_id`
  * replay, with a client-visible buffer instead of a fixed event cache.
  */
+
+/** How many entries the buffer keeps when nothing else is said. */
+export const DEFAULT_RING_CAPACITY = 512;
+
+/**
+ * How many bytes the buffer keeps when nothing else is said.
+ *
+ * The entry count alone does not bound the memory: one entry holds a frame of whatever
+ * length the sender produced, so a buffer of five hundred entries can be five hundred
+ * large frames. The byte bound is what makes the buffer's memory a known quantity.
+ */
+export const DEFAULT_RING_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The number of bytes a string takes when it is sent.
+ *
+ * A string's length counts UTF-16 code units, which is fewer than the bytes it becomes
+ * on the wire for anything outside ASCII, so the length alone would let a frame past a
+ * byte cap.
+ */
+export function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 export interface RingEntry {
   seq: number;
   data: string;
@@ -13,10 +37,18 @@ export interface RingEntry {
 
 export class SeqRing {
   private readonly entries: RingEntry[] = [];
+  /** The bytes the buffered entries take up. */
+  private bytes = 0;
 
-  constructor(private readonly capacity: number) {
+  constructor(
+    private readonly capacity: number,
+    private readonly maxBytes: number = DEFAULT_RING_MAX_BYTES,
+  ) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new RangeError('SeqRing capacity must be a positive integer');
+    }
+    if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+      throw new RangeError('SeqRing byte limit must be a positive integer');
     }
   }
 
@@ -30,11 +62,25 @@ export class SeqRing {
     return this.entries.length;
   }
 
-  /** Appends an entry, evicting the oldest when the buffer is full. */
+  /** The bytes the buffered entries take up. */
+  get byteSize(): number {
+    return this.bytes;
+  }
+
+  /**
+   * Appends an entry, evicting the oldest when the buffer is full.
+   *
+   * The oldest entry goes when the buffer is over its entry count or over its byte
+   * count, whichever happens first.
+   */
   push(seq: number, data: string): void {
+    const size = byteLength(data);
     this.entries.push({ seq, data });
-    while (this.entries.length > this.capacity) {
-      this.entries.shift();
+    this.bytes += size;
+    while (this.entries.length > this.capacity || (this.bytes > this.maxBytes && this.entries.length > 1)) {
+      const evicted = this.entries.shift();
+      if (!evicted) break;
+      this.bytes -= byteLength(evicted.data);
     }
   }
 
@@ -70,5 +116,6 @@ export class SeqRing {
 
   clear(): void {
     this.entries.length = 0;
+    this.bytes = 0;
   }
 }
