@@ -44,7 +44,7 @@ workspace package).
 
 ## It kept the promise honest
 
-The project ships with **465 tests** across the four packages (protocol, relay, bridge,
+The project ships with **472 tests** across the four packages (protocol, relay, bridge,
 client), and the end-to-end run is against a live six-bot team: a real pairing code, a real
 streamed reply, a real dispatched task, real memory entries read back out of the team's own
 store.
@@ -94,7 +94,7 @@ reasoning about it: one rebuilt the pre-fix relay in a sandbox to show the test 
 fail, and the other transpiled the real store and drove it through eight frame orderings.
 Both found things I had read past.
 
-**465 tests pass**, and the new ones were written to fail against broken code: the duration
+**472 tests pass**, and the new ones were written to fail against broken code: the duration
 has to be a real measurement, the call ids have to be distinct, the history has to be in
 order.
 
@@ -102,7 +102,7 @@ order.
 
 The relay is a deployed Cloudflare Worker, not a script on my laptop:
 
-- **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io>
+- **Live client:** <https://elv2k4rux8xtv.space.minimax.io>
 - **Relay:** <https://minimax-bot-relay.nattiini45.workers.dev>
 - **Demo video:** <https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4>
 

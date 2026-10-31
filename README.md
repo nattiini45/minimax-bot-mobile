@@ -12,10 +12,10 @@ native app.
 > real bugs the model found by working against a live team — is in
 > [`docs/CREATION-NOTE.md`](docs/CREATION-NOTE.md).
 >
-> **Live client:** <https://n5qi7wnkhcwnd.space.minimax.io> ·
+> **Live client:** <https://elv2k4rux8xtv.space.minimax.io> ·
 > [Demo video](https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4) ·
 > [Android APK](https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk) ·
-> [Live tool trace](https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png)
+> [Live tool trace](https://elv2k4rux8xtv.space.minimax.io/screenshot-trace.png)
 
 ```
 ┌──────────────────────────┐
@@ -277,10 +277,10 @@ Two runner notes, both verified on Node 24:
 |---|---|---|
 | `packages/protocol` + `packages/relay` | 205 | vitest |
 | `packages/bridge` | 153 | node:test |
-| `apps/app` | 107 | jest + jest-expo |
-| **Total** | **465** | |
+| `apps/app` | 114 | jest + jest-expo |
+| **Total** | **472** | |
 
-One test is skipped on purpose, so 464 run and 464 pass. The protocol and the
+One test is skipped on purpose, so 471 run and 471 pass. The protocol and the
 relay are one vitest run: both are named in the same command, and the split
 between them is the two protocol files and the thirteen relay ones.
 
@@ -304,7 +304,7 @@ between them is the two protocol files and the thirteen relay ones.
 
 The client is an Expo app, so the same code runs as a PWA.
 
-**The live client is running:** <https://n5qi7wnkhcwnd.space.minimax.io>
+**The live client is running:** <https://elv2k4rux8xtv.space.minimax.io>
 
 It talks to a relay that is deployed on the public internet
 (<https://minimax-bot-relay.nattiini45.workers.dev>), so a stranger can open the link,

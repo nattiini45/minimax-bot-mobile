@@ -7,12 +7,12 @@ public artifact, carries the creation note, and uses `#MiniMaxCode`.
 >
 > | Placeholder | Value |
 > | --- | --- |
-> | `LIVE_APP` | https://n5qi7wnkhcwnd.space.minimax.io |
+> | `LIVE_APP` | https://elv2k4rux8xtv.space.minimax.io |
 > | `REPO` | https://github.com/nattiini45/minimax-bot-mobile |
 > | `VIDEO` | https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4 |
 > | `APK` | https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk |
 > | `RELEASE` | https://github.com/nattiini45/minimax-bot-mobile/releases/tag/v0.1.0 |
-> | `SCREENSHOTS` | https://n5qi7wnkhcwnd.space.minimax.io/screenshot-trace.png · https://n5qi7wnkhcwnd.space.minimax.io/screenshot-team.png |
+> | `SCREENSHOTS` | https://elv2k4rux8xtv.space.minimax.io/screenshot-trace.png · https://elv2k4rux8xtv.space.minimax.io/screenshot-team.png |
 >
 > The live app already points at the deployed relay
 > (`https://minimax-bot-relay.nattiini45.workers.dev`), so a stranger only has to type the
@@ -60,7 +60,7 @@ This is the entry point. Post it in the channel, and post it *before* Nov 3.
 Built a native mobile app for the @minimax-bot team — one codebase for Android, iOS and PWA —
 with MiniMax Code and M3.1 Flash. #MiniMaxCode
 
-Live app (open it, it is the real client): https://n5qi7wnkhcwnd.space.minimax.io
+Live app (open it, it is the real client): https://elv2k4rux8xtv.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
 Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
 Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
@@ -80,7 +80,7 @@ its work: "tool_search · 15ms", "mcp_invoke · 20ms".
 Then I had three independent reviewers read the code with fresh eyes, having never seen how it
 was written. They found six more defects that would have shipped — among them a regression
 test that passed against the very code it was meant to catch, and a tool trace that measured
-the wrong call whenever the same tool ran twice in a turn. 465 tests pass now, and the new
+the wrong call whenever the same tool ran twice in a turn. 472 tests pass now, and the new
 ones were written to fail against broken code.
 
 Creation note: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
@@ -108,7 +108,7 @@ MiniMax Code can run a team of agents on your desktop. What it could not do was 
 to that team from your phone.
 
 So I built one: https://github.com/nattiini45/minimax-bot-mobile
-Live app (the real client, in a browser): https://n5qi7wnkhcwnd.space.minimax.io
+Live app (the real client, in a browser): https://elv2k4rux8xtv.space.minimax.io
 Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
 Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
 
@@ -151,7 +151,7 @@ store and drove it through eight frame orderings. Both found things I had read p
 All of it was built with M3.1 Flash in MiniMax Code. The full story, including the limits I
 did not fix, is here: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
 
-465 tests pass across the four packages, and the end-to-end run is against a live team — real
+472 tests pass across the four packages, and the end-to-end run is against a live team — real
 pairing code, real streamed reply, real dispatched task, real memory entries.
 
 Questions welcome. Especially about the relay design and the build pipeline.
@@ -199,7 +199,7 @@ They found six more defects that would have shipped — including a regression t
 
 ```
 Live app (it is the real client, not a mock):
-https://n5qi7wnkhcwnd.space.minimax.io
+https://elv2k4rux8xtv.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
 ```
 
