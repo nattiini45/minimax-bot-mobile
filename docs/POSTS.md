@@ -50,6 +50,13 @@ author's own machine — `C:\Users\<name>\.minimax\plugins\minimax-bot-bridge` �
 the model gave about the project. Check whether that should be re-recorded before the video
 goes out.
 
+The live app's Chats tab has the same problem in a smaller way: the room's replay buffer
+still holds the message an earlier end-to-end test sent to the Chief, and that message is
+the creation note, which quotes a local path (`D:\Projects\…`). Nothing in the posts quotes
+it, but a screenshot of the chat would. Clearing the room's replay buffer (restarting the
+relay) empties the phone's chat history as well, so it is a choice between a clean slate
+and a chat that has something in it.
+
 ---
 
 ## 1. Discord — `🧩丨show-your-case`
