@@ -349,3 +349,140 @@ describe('a relay whose counter was rewound', () => {
     expect(phone.resumePoint).toBe(41);
   });
 });
+
+/**
+ * A replay is history.
+ *
+ * The relay hands a phone the frames it missed, and those frames describe the
+ * states the room passed through on the way: a team that had not been built yet, a
+ * desktop that was not running yet. Applied one frame at a time, the phone shows
+ * them one after the other, and the user is told the team is not linked while the
+ * team is right there. Held and applied together, the phone is given the state the
+ * room is in now.
+ */
+describe('a relay that replays the frames a phone missed', () => {
+  const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
+  let sockets: FakeSocket[] = [];
+
+  beforeEach(() => {
+    sockets = [];
+    // The relay offers no ticket, so the client opens the socket with the token.
+    globalThis.fetch = jest.fn(async () => ({ ok: false })) as unknown as typeof fetch;
+    globalThis.WebSocket = class extends FakeSocket {
+      constructor(url: string) {
+        super(url);
+        sockets.push(this);
+      }
+    } as unknown as typeof WebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
+  });
+
+  async function connected() {
+    const frames: Frame[] = [];
+    const phone = new RelayClient({
+      url: 'https://relay.example.workers.dev',
+      accountId: 'default',
+      deviceId: 'device-1',
+      token: 'the-device-token',
+      clientVersion: '0.1.0',
+      onFrame: (frame) => frames.push(frame),
+    });
+
+    phone.connect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return { frames, phone, socket: sockets[0]! };
+  }
+
+  function snapshot(seq: number) {
+    return {
+      v: 1,
+      id: `f${seq}`,
+      ts: seq,
+      type: 'evt.team_snapshot',
+      source: 'relay',
+      payload: {},
+      seq,
+    };
+  }
+
+  it('applies the whole replay at once', async () => {
+    const { frames, phone, socket } = await connected();
+
+    socket.deliver({
+      v: 1,
+      id: 'h1',
+      ts: 1,
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: 3, bridgeOnline: true, truncated: false },
+    });
+    // The hello is not part of the replay: the app needs it now.
+    expect(frames[0]?.type).toBe('hello.ok');
+
+    socket.deliver(snapshot(1));
+    socket.deliver(snapshot(2));
+
+    // The replay is not finished, so the app has been given none of it: the states
+    // the room passed through on the way are not shown one after the other.
+    expect(frames.filter((frame) => frame.type === 'evt.team_snapshot')).toHaveLength(0);
+    // And the cursor has not moved, because the app has not seen them.
+    expect(phone.resumePoint).toBe(0);
+
+    socket.deliver(snapshot(3));
+
+    // The replay is over: the phone is given all of it, and the cursor moves.
+    expect(frames.filter((frame) => frame.type === 'evt.team_snapshot')).toHaveLength(3);
+    expect(phone.resumePoint).toBe(3);
+  });
+
+  it('applies a replay the relay could not finish', async () => {
+    const { frames, phone, socket } = await connected();
+
+    // The relay could not replay everything, so the replay does not end at the
+    // number its hello carried: the last frame it can serve is below it.
+    socket.deliver({
+      v: 1,
+      id: 'h1',
+      ts: 1,
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: 40, bridgeOnline: true, truncated: true },
+    });
+    socket.deliver(snapshot(39));
+
+    expect(frames.filter((frame) => frame.type === 'evt.team_snapshot')).toHaveLength(0);
+
+    // The room goes quiet, and the held frames are applied rather than lost.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(frames.filter((frame) => frame.type === 'evt.team_snapshot')).toHaveLength(1);
+    expect(phone.resumePoint).toBe(39);
+  });
+
+  it('asks for the frames it never applied again after a dropped socket', async () => {
+    const { frames, phone, socket } = await connected();
+
+    socket.deliver({
+      v: 1,
+      id: 'h1',
+      ts: 1,
+      type: 'hello.ok',
+      source: 'relay',
+      payload: { seq: 3, bridgeOnline: true, truncated: false },
+    });
+    socket.deliver(snapshot(1));
+
+    // The socket drops before the replay is over. The cursor has not moved, so
+    // the phone asks for those frames again rather than losing them.
+    phone.disconnect();
+
+    expect(frames.filter((frame) => frame.type === 'evt.team_snapshot')).toHaveLength(0);
+    expect(phone.resumePoint).toBe(0);
+    expect(new URL(phone.endpoint(null)).searchParams.get('lastSeq')).toBe('0');
+  });
+});

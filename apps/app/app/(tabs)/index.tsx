@@ -17,6 +17,8 @@ export default function TeamScreen() {
   const diagnostics = useAppStore((state) => state.diagnostics);
   const session = useAppStore((state) => state.session);
   const lastError = useAppStore((state) => state.lastError);
+  const bridgeOnline = useAppStore((state) => state.bridgeOnline);
+  const desktopKnown = useAppStore((state) => state.desktopKnown);
 
   if (!session) {
     return (
@@ -38,6 +40,32 @@ export default function TeamScreen() {
             <Text style={[styles.ctaLabel, { color: theme.colors.userInk }]}>Pair this phone</Text>
           </Pressable>
         </View>
+      </View>
+    );
+  }
+
+  // The desktop has not answered yet.
+  //
+  // Saying the team is not linked now would be a guess, and the wrong one most of
+  // the time: the desktop is usually up and the phone is simply early. The relay's
+  // replay is history — it is applied as one batch when it has all arrived — so
+  // until then there is nothing to show and nothing to complain about.
+  const desktopAnswered =
+    diagnostics.teamToolsAvailable === true || typeof diagnostics.reason === 'string';
+
+  if (!desktopAnswered) {
+    const offline = desktopKnown && !bridgeOnline;
+    return (
+      <View style={styles.screen}>
+        <EmptyState
+          icon={offline ? '○' : '◌'}
+          title={offline ? 'Your desktop is offline' : 'Connecting to your desktop…'}
+          body={
+            offline
+              ? 'Start MiniMax Code on your desktop to reach the team.'
+              : 'The team appears as soon as your desktop answers.'
+          }
+        />
       </View>
     );
   }

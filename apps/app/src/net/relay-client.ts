@@ -13,6 +13,16 @@ import { relayHttpUrl, relayWsUrl } from './relay-url';
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
+/**
+ * How long a replay may wait for its last frame before it is applied anyway.
+ *
+ * The relay says how far its counter has reached, so a replay that is complete is
+ * recognised by its last frame. A replay the relay could not complete — its buffer
+ * no longer holds everything this phone missed — has no such last frame, and this is
+ * what lets the phone go on rather than wait for a frame that is never coming.
+ */
+const HOLD_FLUSH_MS = 250;
+
 /** Close codes the relay uses for a socket it will never serve again. */
 export const CLOSE_UNAUTHORIZED = CLOSE_CODE.unauthorized;
 export const CLOSE_DEVICE_REVOKED = CLOSE_CODE.deviceRevoked;
@@ -53,6 +63,32 @@ export class RelayClient {
   private lastSeq = 0;
   /** Whether the relay said it could not replay everything this phone missed. */
   private replayWasIncomplete = false;
+  /**
+   * The frames the relay replayed, held until the whole replay has arrived.
+   *
+   * A replay is history. Applied one frame at a time, the phone shows the states the
+   * room passed through on the way — including a team that had not been built yet and
+   * a desktop that was not running yet — and the user is told the team is not linked
+   * while the team is right there. Held and applied together, the phone is given the
+   * state the room is in now.
+   *
+   * @type {Frame[]}
+   */
+  private held: Frame[] = [];
+  /** The number the relay's hello said its counter had reached. */
+  private replayTarget = 0;
+  /** Whether a replay is being held. */
+  private holding = false;
+  /** The timer that applies a replay the relay could not finish. */
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The highest number that has arrived, which can be ahead of what the app has.
+   *
+   * The cursor moves only when the frames have been applied, so the two are separate:
+   * a socket that drops mid-replay must not leave the phone claiming to have seen
+   * frames the app never received.
+   */
+  private receivedSeq = 0;
   /** Whether the relay's hello has been seen, so the two counters can be compared. */
   private resumeSettled = false;
   /** Whether the desktop was attached to the room, as the last hello said. */
@@ -137,9 +173,27 @@ export class RelayClient {
     if (this.closed) return;
     this.setStatus('connecting');
     this.opened = false;
+    // A new connection starts with nothing held. The frames of a replay that was cut
+    // short are asked for again, because the cursor never moved past them.
+    this.dropHeld();
     // The socket is opened with a ticket when the relay offers one, so the
     // long-lived token does not travel in the URL.
     void this.open();
+  }
+
+  /**
+   * Throws away the frames of a replay that was never applied.
+   *
+   * The cursor does not move when this happens, so the relay is asked for those
+   * frames again the next time the phone connects.
+   */
+  private dropHeld(): void {
+    this.held = [];
+    this.holding = false;
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
   }
 
   private async open(): Promise<void> {
@@ -264,20 +318,79 @@ export class RelayClient {
         // The view has a hole in it, so the app is told to rebuild it.
         frame = { ...frame, payload: { ...payload, truncated: true } };
       }
+      // The relay is about to replay the frames this phone missed. They are held until
+      // the whole replay has arrived, so the phone's view is rebuilt in one step
+      // instead of passing through the states the room was in on the way.
+      this.replayTarget = typeof relaySeq === 'number' ? relaySeq : 0;
+      this.holding = this.replayTarget > 0;
+      this.receivedSeq = this.lastSeq;
+      // The hello itself is not part of the replay: the app needs it now, because it
+      // is the frame that says whether the phone's view is complete.
+      this.options.onFrame?.(frame);
+      return;
     }
     // A frame the relay has already sequenced is one the app has already applied.
     if (typeof frame.seq === 'number') {
       if (frame.seq <= this.lastSeq) return;
-      if (frame.seq > this.lastSeq + 1 && this.resumeSettled && !this.replayWasIncomplete) {
+      if (frame.seq > this.receivedSeq + 1 && this.resumeSettled && !this.replayWasIncomplete) {
         // The relay's numbers jumped, so frames were lost on the way here. The
         // phone cannot get them back, so it rebuilds its view instead of
         // carrying on with a hole in the conversation.
+        this.flushHeld();
         this.resync(frame.seq);
       }
       this.replayWasIncomplete = false;
-      this.lastSeq = frame.seq;
+      this.receivedSeq = frame.seq;
     }
+    if (this.holding) {
+      // Everything that arrives while the replay is held is held with it, so the
+      // phone's view is rebuilt in the order the frames were sent.
+      this.held.push(frame);
+      // The replay ends at the number the relay's hello carried. A frame without a
+      // number is not part of it: it is the answer to something the app asked for.
+      const last = typeof frame.seq === 'number' ? frame.seq >= this.replayTarget : true;
+      if (last) this.flushHeld();
+      else this.armHoldTimer();
+      return;
+    }
+    if (typeof frame.seq === 'number') this.lastSeq = frame.seq;
     this.options.onFrame?.(frame);
+  }
+
+  /**
+   * Applies the frames the relay replayed, all at once.
+   *
+   * The phone's view is rebuilt in one step, so the states the room passed through
+   * on the way are not shown one after the other, and the cursor only moves once
+   * the app has actually been given the frames.
+   */
+  private flushHeld(): void {
+    this.holding = false;
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    const frames = this.held;
+    this.held = [];
+    for (const frame of frames) {
+      if (typeof frame.seq === 'number') this.lastSeq = frame.seq;
+      this.options.onFrame?.(frame);
+    }
+  }
+
+  /**
+   * Gives a replay the relay could not finish a moment to arrive.
+   *
+   * A relay whose buffer no longer holds everything this phone missed cannot say
+   * which frame ends the replay, so the held frames are applied once the room has
+   * been quiet for a moment.
+   */
+  private armHoldTimer(): void {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (this.holding) this.flushHeld();
+    }, HOLD_FLUSH_MS);
   }
 
   /**
@@ -307,6 +420,7 @@ export class RelayClient {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.dropHeld();
     this.socket?.close();
     this.socket = null;
     this.setStatus('idle');

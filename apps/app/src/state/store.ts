@@ -64,6 +64,8 @@ export interface AppState {
   status: ConnectionStatus;
   lastError: string | null;
   bridgeOnline: boolean;
+  /** Whether the relay has said whether a desktop is attached. */
+  desktopKnown: boolean;
 
   bots: AppBot[];
   groups: AppGroup[];
@@ -532,6 +534,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   lastError: null,
   bridgeOnline: false,
   /**
+   * Whether the relay has said whether a desktop is attached.
+   *
+   * `bridgeOnline` alone cannot say that: it is false both when the relay has told
+   * the phone that no desktop is attached and when the phone has not heard from the
+   * relay yet. The two need different words on the screen — one is a problem the
+   * user can fix, the other is a phone that is simply early.
+   */
+  desktopKnown: false,
+  /**
    * How many times the phone has had to rebuild its view of the conversation.
    *
    * A screen that shows a conversation watches this: the projection is dropped
@@ -569,7 +580,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingOp: {},
 
   setSession: (session) => {
-    set({ session });
+    // A phone that has no session has no desktop to hear from, so what the relay
+    // said about one is no longer about this phone.
+    set({ session, desktopKnown: session ? get().desktopKnown : false });
     void persistSession(session);
   },
 
@@ -824,7 +837,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     if (frame.type === 'hello.ok') {
-      set({ bridgeOnline: p.bridgeOnline === true });
+      set({ bridgeOnline: p.bridgeOnline === true, desktopKnown: true });
       if (p.truncated === true) {
         // The relay could not replay everything this phone missed, so its view has a
         // hole. The projection is dropped and rebuilt from a fresh read — including
