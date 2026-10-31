@@ -138,6 +138,14 @@ reply streamed in twelve chunks, and no error frames in the replay**.
   dispatch, the memory — are reached through the bridge's own connection to the
   `@minimax-bot` plugin, which is why they work on any chat; the persona of an individual
   Bot is the plugin's own, and the phone shows which chat a reply belongs to.
+- The dependencies carry 31 advisories — one low and 30 moderate, none critical and none
+  high — and all of them are in the build and test toolchain, so none of them reaches the
+  published web bundle or the APK: the bundler ships only what the app imports. The fix
+  npm offers is `npm audit fix --force`, which also downgrades the Expo SDK from 58 to 51.
+  The fixed lines of `glob` and `minimatch` sit outside the ranges the Expo CLI and jest
+  declare, and npm 11.8.0 does not apply an `overrides` change to a committed lockfile, so
+  forcing them means re-resolving the whole tree at once. `deepmerge` has no fixed release
+  at all: 4.3.1 is the newest published and it is the vulnerable one.
 
 ---
 
