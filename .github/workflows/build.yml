@@ -83,7 +83,12 @@ jobs:
           EXPECTED_RELEASE_CERT_SHA256: ${{ vars.EXPECTED_RELEASE_CERT_SHA256 || secrets.EXPECTED_RELEASE_CERT_SHA256 }}
         # The build fails when the release key is missing and when the artefact it
         # produced is not signed with the expected certificate.
-        run: scripts/build-android.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/src"
+        #
+        # The script is run through `bash` rather than executed directly. A checkout
+        # does not always carry the executable bit — it is lost on a checkout made
+        # from a file system that has no notion of it — and a script that is not
+        # executable cannot be run, whatever the commit says its mode is.
+        run: bash scripts/build-android.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/src"
 
       - uses: actions/upload-artifact@v4
         with:

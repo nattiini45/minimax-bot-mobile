@@ -72,8 +72,24 @@ function client(fatal: number[] = []) {
   });
 }
 
-async function settle() {
-  for (let i = 0; i < 4; i += 1) {
+/**
+ * Waits until the client has got somewhere, instead of waiting a fixed number of ticks.
+ *
+ * A fixed number of ticks is a guess about how many turns the machine needs to read a
+ * response body, and it is a guess that gets worse when the machine is busy: the test
+ * then fails for a reason that has nothing to do with the code it is testing. Waiting
+ * for the state the test is about is both faster when the machine is quick and correct
+ * when it is not.
+ *
+ * @param reached the state to wait for
+ * @param what what was being waited for, so a failure says what never happened
+ */
+async function waitFor(reached: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!reached()) {
+    if (Date.now() > deadline) {
+      throw new Error(`the client never ${what}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
@@ -88,7 +104,7 @@ describe('a relay that refuses the credential', () => {
       const fatal: number[] = [];
       const phone = client(fatal);
       phone.connect();
-      await settle();
+      await waitFor(() => fatal.length === 1, 'gave the pairing up');
 
       expect(fatal).toHaveLength(1);
       expect(sockets).toHaveLength(0);
@@ -106,7 +122,7 @@ describe('a relay that refuses the credential', () => {
       const fatal: number[] = [];
       const phone = client(fatal);
       phone.connect();
-      await settle();
+      await waitFor(() => sockets.length === 1, 'opened a socket with the token');
 
       expect(fatal).toHaveLength(0);
       // The connection was tried with the token instead.
@@ -126,14 +142,14 @@ describe('a room that does not know what a ticket is', () => {
       const fatal: number[] = [];
       const phone = client(fatal);
       phone.connect();
-      await settle();
+      await waitFor(() => sockets.length === 1, 'opened a socket with the ticket');
 
       expect(sockets).toHaveLength(1);
       expect(sockets[0]?.url).toContain('ticket=');
 
       // The room refuses the ticket with the code it refuses a credential with.
       sockets[0]?.onclose?.({ code: 4001 });
-      await settle();
+      await waitFor(() => sockets.length === 2, 'opened a socket with the token');
 
       // The token is tried, because a room that predates the ticket does not know
       // what one is.
@@ -143,7 +159,8 @@ describe('a room that does not know what a ticket is', () => {
 
       // And when the token is refused too, the pairing is over.
       sockets[1]?.onclose?.({ code: 4001 });
-      await settle();
+      await waitFor(() => fatal.length === 1, 'gave the pairing up');
+
       expect(fatal).toHaveLength(1);
 
       phone.disconnect();
@@ -158,12 +175,12 @@ describe('a room that does not know what a ticket is', () => {
       const fatal: number[] = [];
       const phone = client(fatal);
       phone.connect();
-      await settle();
+      await waitFor(() => sockets.length === 1, 'opened a socket with the ticket');
 
       sockets[0]?.onclose?.({ code: 4003 });
-      await settle();
+      await waitFor(() => sockets.length === 2, 'opened a socket with the token');
       sockets[1]?.onclose?.({ code: 4003 });
-      await settle();
+      await waitFor(() => fatal.length === 1, 'gave the pairing up');
 
       expect(fatal).toHaveLength(1);
       phone.disconnect();
