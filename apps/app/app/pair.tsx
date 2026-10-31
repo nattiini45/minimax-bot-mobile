@@ -128,7 +128,13 @@ export default function PairScreen() {
       setSession(session);
       connectRelay(session);
       notifySuccess();
-      router.back();
+      // The team is where the phone belongs now, so the phone goes there — it does not
+      // go back. "Back" only works when there is a screen behind this one, and a phone
+      // that opened the pairing link directly has none: it would pair successfully and
+      // then stay on a pairing screen that is already finished. Replacing the route
+      // also leaves the phone where it belongs if the user pressed the browser's back
+      // button afterwards, instead of walking into a form it has already filled in.
+      router.replace('/');
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Pairing failed.';
       setErrorState(message);
