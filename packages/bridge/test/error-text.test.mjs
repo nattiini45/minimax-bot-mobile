@@ -15,7 +15,7 @@ import { Bridge } from '../miniapp/node/bridge.mjs';
  * desktop keeps the detail.
  */
 
-const SECRET = '/Users/caspar/.minimax/plugins/minimax-bot-bridge/tools.json';
+const SECRET = '/Users/local-user/.minimax/plugins/minimax-bot-bridge/tools.json';
 
 /**
  * @param {{toolList?: () => Promise<unknown>, toolCall?: () => Promise<unknown>}} options

@@ -44,18 +44,21 @@ body to both. Check the subreddit's rules before you post.
 the words *MiniMax Code* and *M3.1 Flash*, and `#MiniMaxCode`.
 
 **What must never appear:** a pairing code, a token, a local file path, a real name, or
-anything from the team's private memory. The screenshots carry none of it. The video carries
-no credential and nothing from the team's memory, but it does show one path from the
-author's own machine — `C:\Users\<name>\.minimax\plugins\minimax-bot-bridge` — in the answer
-the model gave about the project. Check whether that should be re-recorded before the video
-goes out.
+anything from the team's private memory. The screenshots carry none of it.
 
-The live app's Chats tab has the same problem in a smaller way: the room's replay buffer
-still holds the message an earlier end-to-end test sent to the Chief, and that message is
-the creation note, which quotes a local path (`D:\Projects\…`). Nothing in the posts quotes
-it, but a screenshot of the chat would. Clearing the room's replay buffer (restarting the
-relay) empties the phone's chat history as well, so it is a choice between a clean slate
-and a chat that has something in it.
+The published video was checked frame by frame and cleaned before it went out. The answer
+the model gave about the project named the author's own machine — a `C:\Users\…` path and
+an `F:\Projects\…` path, with the author's first name in the first one — and the Bot
+screen showed three entries from the team's memory. That window is cut out of the
+published file and the memory list is blank in it, so the video still shows the six-bot
+roster, the streamed reply and the live tool trace, with nothing private in it.
+
+The live app's Chats tab still has the older version of the same problem: the room's
+replay buffer holds the Chief's answers from an earlier end-to-end run, and they quote a
+local path (`D:\Projects\minimax-bot-mobile`). Nothing in the posts quotes it and it
+carries no name and no credential, but a screenshot of that chat would show a path.
+Clearing the room's replay buffer (restarting the relay) empties the phone's chat history
+as well, so it is a choice between a clean slate and a chat that has something in it.
 
 ---
 
@@ -224,6 +227,8 @@ https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minima
 
 - [ ] The live link opens from a logged-out browser (test it in a private window).
 - [ ] The demo video shows the real app: pairing, a streamed reply, the live trace.
+- [ ] The published `demo.mp4` is the cleaned file, not the first recording
+      (SHA-256 `E4B1B221BFF923205ED7683C47FF997C9589A2DECDEA526630EB5CCE1124BE80`).
 - [ ] All three posts name **MiniMax Code** and **M3.1 Flash**, and carry `#MiniMaxCode`.
 - [ ] The Discord entry is posted in `🧩丨show-your-case` with the public link + creation note.
 - [ ] No token, pairing code, local path or personal data appears in any screenshot or clip.
