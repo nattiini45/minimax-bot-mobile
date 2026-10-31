@@ -30,6 +30,7 @@
 #   EXPO_ANDROID_KEY_ALIAS         the key alias               (required)
 #   EXPO_ANDROID_KEY_PASSWORD      the key password             (required)
 #   EXPECTED_RELEASE_CERT_SHA256   the release certificate      (required)
+#   EXPO_PUBLIC_RELAY_URL          the relay the build names   (required)
 #
 # The release key is required, not optional. A release signed with the Expo
 # template's debug keystore can be replaced by anyone who has that keystore —
@@ -48,12 +49,16 @@ export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 export EXPO_NO_TELEMETRY=1
+# Expo inlines EXPO_PUBLIC_* at bundle time, so the relay address has to be in
+# the environment of the bundling step, not only of this script.
+export EXPO_PUBLIC_RELAY_URL
 
 : "${EXPO_ANDROID_KEYSTORE_PATH:?The release keystore is required: set EXPO_ANDROID_KEYSTORE_PATH. The build will not produce a debug-signed release.}"
 : "${EXPO_ANDROID_KEYSTORE_PASSWORD:?The release keystore password is required: set EXPO_ANDROID_KEYSTORE_PASSWORD.}"
 : "${EXPO_ANDROID_KEY_ALIAS:?The release key alias is required: set EXPO_ANDROID_KEY_ALIAS.}"
 : "${EXPO_ANDROID_KEY_PASSWORD:?The release key password is required: set EXPO_ANDROID_KEY_PASSWORD.}"
 : "${EXPECTED_RELEASE_CERT_SHA256:?The expected release certificate is required: set EXPECTED_RELEASE_CERT_SHA256 to the SHA-256 digest of the release certificate.}"
+: "${EXPO_PUBLIC_RELAY_URL:?The relay address is required: set EXPO_PUBLIC_RELAY_URL to the relay this build names. A published build that does not know its relay makes every user type the address first.}"
 
 echo "=== source: $SOURCE_DIR"
 echo "=== build:  $BUILD_DIR"
@@ -195,3 +200,34 @@ if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
   exit 1
 fi
 echo "signed with the release certificate: $ACTUAL_CERT"
+
+echo "=== the relay the published build names ==="
+# The assertion is made against the artefact, not against the environment that
+# produced it: an environment variable that was set is a promise, and a bundle
+# that carries the address is the evidence.
+#
+# The string is searched for in the Hermes bundle as bytes, and the bundle is
+# read out of the APK with Python's zipfile rather than with unzip, because the
+# runner's unzip is not guaranteed to be present.
+BUNDLE_STRINGS="$(python3 - "$SIGNED_APK" "$EXPO_PUBLIC_RELAY_URL" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    try:
+        data = z.read('assets/index.android.bundle')
+    except KeyError:
+        sys.exit(0)
+# The Hermes string table stores its strings in more than one encoding, so the
+# address is searched for in both: a miss in one is not a miss in the bundle.
+for enc in ('utf-8', 'utf-16-le'):
+    if sys.argv[2].encode(enc) in data:
+        print(enc)
+        break
+PY
+)" 2>/dev/null || true
+
+if [ -z "$BUNDLE_STRINGS" ]; then
+  echo "the APK does not name its relay: $EXPO_PUBLIC_RELAY_URL" >&2
+  echo "  the bundle was searched as UTF-8 and UTF-16 and carried neither" >&2
+  exit 1
+fi
+echo "the bundle names the relay (as $BUNDLE_STRINGS)"

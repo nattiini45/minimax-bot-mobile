@@ -81,6 +81,17 @@ jobs:
           EXPO_ANDROID_KEY_ALIAS: ${{ secrets.EXPO_ANDROID_KEY_ALIAS }}
           EXPO_ANDROID_KEY_PASSWORD: ${{ secrets.EXPO_ANDROID_KEY_PASSWORD }}
           EXPECTED_RELEASE_CERT_SHA256: ${{ vars.EXPECTED_RELEASE_CERT_SHA256 || secrets.EXPECTED_RELEASE_CERT_SHA256 }}
+          # The relay address the published build names.
+          #
+          # A published build has to know where to go: a stranger downloads it,
+          # types the six digit code the desktop is showing, and drives the real
+          # team. A build that ships with an empty relay field makes that person
+          # type a 48 character address first, and the creation note promises
+          # they will not have to. The address is public - it is in the README and
+          # the creation note - so it is inlined, not a secret.
+          #
+          # The build script refuses to publish an APK that does not carry it.
+          EXPO_PUBLIC_RELAY_URL: https://minimax-bot-relay.nattiini45.workers.dev
         # The build fails when the release key is missing and when the artefact it
         # produced is not signed with the expected certificate.
         #
