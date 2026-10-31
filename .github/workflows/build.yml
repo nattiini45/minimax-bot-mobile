@@ -93,5 +93,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: android-release-apk
-          path: ${{ runner.temp }}/src/apps/app/android/app/build/outputs/**/*.apk
+          # The published artefact is the one the build signed with the release key.
+          # The file Gradle produced carries the template's debug identity and is not
+          # published, so a build that failed to sign never offers an APK at all.
+          path: ${{ runner.temp }}/src/dist/*.apk
           if-no-files-found: error

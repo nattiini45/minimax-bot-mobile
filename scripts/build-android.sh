@@ -141,7 +141,6 @@ cd "$BUILD_DIR/apps/app/android"
 echo "=== the APK ==="
 find "$BUILD_DIR/apps/app/android/app/build/outputs" -name '*.apk' -exec ls -la {} \;
 
-echo "=== the release certificate ==="
 APK="$(find "$BUILD_DIR/apps/app/android/app/build/outputs" -name '*.apk' -print -quit)"
 if [ -z "$APK" ]; then
   echo "no APK was produced, so there is nothing to sign or to publish" >&2
@@ -154,9 +153,31 @@ if [ -z "$APKSIGNER" ]; then
   exit 1
 fi
 
+# The generated project signs its release build with the template's debug key, so the
+# artefact Gradle produces carries an identity that everybody already has: the
+# template's keystore is published with React Native itself. Such a build can be
+# replaced by anyone who holds that keystore, and the operating system would accept
+# the replacement as an update to this one.
+#
+# The artefact is therefore signed again here, with the release key, and the signed
+# file is the only one that is published. The gate below reads the certificate of
+# that file, so a build that could not sign it never reaches a release.
+echo "=== sign the release with the release key ==="
+SIGNED_APK="$BUILD_DIR/dist/minimax-bot-mobile-release.apk"
+mkdir -p "$(dirname "$SIGNED_APK")"
+"$APKSIGNER" sign \
+  --ks "$EXPO_ANDROID_KEYSTORE_PATH" \
+  --ks-key-alias "$EXPO_ANDROID_KEY_ALIAS" \
+  --ks-pass "pass:$EXPO_ANDROID_KEYSTORE_PASSWORD" \
+  --key-pass "pass:$EXPO_ANDROID_KEY_PASSWORD" \
+  --out "$SIGNED_APK" \
+  "$APK"
+ls -la "$SIGNED_APK"
+
+echo "=== the release certificate ==="
 # The digest is read with `|| true` so that an unreadable certificate produces the
 # message below rather than an exit from `set -e` in the middle of the pipeline.
-ACTUAL_CERT="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null \
+ACTUAL_CERT="$("$APKSIGNER" verify --print-certs "$SIGNED_APK" 2>/dev/null \
   | grep -i 'certificate SHA-256 digest' \
   | head -1 \
   | sed 's/.*digest: *//' \
@@ -164,7 +185,7 @@ ACTUAL_CERT="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null \
 EXPECTED_CERT="$(printf '%s' "$EXPECTED_RELEASE_CERT_SHA256" | tr 'A-F' 'a-f' | tr -d ' :')"
 
 if [ -z "$ACTUAL_CERT" ]; then
-  echo "the certificate of $APK could not be read" >&2
+  echo "the certificate of $SIGNED_APK could not be read" >&2
   exit 1
 fi
 if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
