@@ -44,9 +44,10 @@ workspace package).
 
 ## It kept the promise honest
 
-The project ships with **181 passing tests** (protocol, relay, bridge, client), and the
-end-to-end run is against a live six-bot team: a real pairing code, a real streamed reply, a
-real dispatched task, real memory entries read back out of the team's own store.
+The project ships with **465 tests** across the four packages (protocol, relay, bridge,
+client), and the end-to-end run is against a live six-bot team: a real pairing code, a real
+streamed reply, a real dispatched task, real memory entries read back out of the team's own
+store.
 
 The app shows the work, not only the answer. The bridge reports every tool the team runs, and
 the phone renders it live — `tool_search · 15ms`, `mcp_invoke · 20ms` — so a reply is a visible
@@ -93,7 +94,7 @@ reasoning about it: one rebuilt the pre-fix relay in a sandbox to show the test 
 fail, and the other transpiled the real store and drove it through eight frame orderings.
 Both found things I had read past.
 
-**181 tests pass**, and the new ones were written to fail against broken code: the duration
+**465 tests pass**, and the new ones were written to fail against broken code: the duration
 has to be a real measurement, the call ids have to be distinct, the history has to be in
 order.
 
@@ -109,27 +110,34 @@ A published build names its relay through `EXPO_PUBLIC_RELAY_URL`, which Expo in
 time, so the link above opens a client that already knows where to go — a stranger types the
 six-digit code and drives the real team. The last end-to-end run over the public path paired a
 device over HTTPS, opened the WebSocket over TLS, pulled the real six-bot roster and recorded
-**twelve tool calls with twelve distinct call ids, every start matched to its own finish, and
-no error frames in the replay**.
+**fifteen tool calls with fifteen distinct call ids, every start matched to its own finish, the
+reply streamed in twelve chunks, and no error frames in the replay**.
 
 ## Honest limits
 
-- The relay keeps its state in memory, so a restart unpairs every phone. Both ends handle it.
+- The relay writes its room down — the device registry, the account's owner, the pairing codes
+  and the replay cursor all live in the Durable Object's storage — so a restart does not unpair
+  the phones. What a restart does lose is the live socket, and both ends reconnect.
 - The team's task tool answers for one batch at a time, so a task list is explicitly partial —
   the phone says so instead of looking complete.
 - The `v0.1.0` APK was signed with the Expo template's debug keystore. That keystore
   is a well-known value, so anyone can produce an APK with the same signing identity
   and the operating system would take it as an update to an installed one. The asset
   has been withdrawn.
-- A release is signed with a private key now. The build refuses to run without it,
-  and it checks the certificate of the artefact it produced before the build is
-  allowed to pass. The native build needs Linux (RN 0.88 hits the 260-character path
-  limit on Windows).
+- A release is signed with a private key now. The build signs the artefact it produced
+  and publishes only the signed file, and it compares the certificate of that file with
+  the expected one before the build is allowed to pass. The native build needs Linux
+  (RN 0.88 hits the 260-character path limit on Windows).
 - A release build may not speak cleartext at all. The network security config it
   ships forbids it, with no exception for any host, so the device token cannot
   travel in the clear in a build that anybody can install. The loopback exception
   a relay on the developer's own machine needs lives in the development source
   sets only, and the build asserts that it stays there.
+- A chat is a turn on the desktop's own agent, so the answer comes from a session that can
+  read this repository and use the desktop's tools. The team tools — the roster, the
+  dispatch, the memory — are reached through the bridge's own connection to the
+  `@minimax-bot` plugin, which is why they work on any chat; the persona of an individual
+  Bot is the plugin's own, and the phone shows which chat a reply belongs to.
 
 ---
 

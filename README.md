@@ -90,18 +90,19 @@ part of every build.
 
 ## Getting started
 
+Node 22.12+ is required (the bridge uses the global `WebSocket`).
+
+A fresh install runs no install script that was not asked for. The root `package.json`
+carries an `allowScripts` list naming the exact packages whose install scripts may run —
+`esbuild`, `workerd`, `@parcel/watcher` and `unrs-resolver` — and npm 11 honours it.
+Nothing has to be approved by hand. A dependency that needs a script and is not on that
+list is installed without it, which is worth knowing when a new one is added: put it on the
+list with the version that was vetted, rather than running the script for everything.
+
 ```bash
 npm install
 npm run build
 npm test
-```
-
-Node 22.12+ is required (the bridge uses the global `WebSocket`). On a fresh
-install npm may ask to approve lifecycle scripts for `esbuild`, `workerd`,
-`@parcel/watcher` and `unrs-resolver`:
-
-```bash
-npm approve-scripts esbuild workerd @parcel/watcher unrs-resolver
 ```
 
 ### Run the client
@@ -192,7 +193,17 @@ scripts/build-android.sh
 # build host produces an APK built against a contract it was not built with.
 ```
 
-The output is `apps/app/android/app/build/outputs/apk/release/app-release.apk`.
+The published artefact is `dist/minimax-bot-mobile-release.apk`.
+
+The generated project signs its release build with the template's debug key, so
+the file Gradle produces carries an identity that is published with React Native
+itself: anybody holding that keystore could replace the build, and the operating
+system would accept the replacement as an update to the installed one. The script
+therefore signs the artefact again with the release key, and publishes only the
+signed file. The certificate of the published file is compared with
+`EXPECTED_RELEASE_CERT_SHA256`, so a build that could not sign never produces an
+artefact at all. The key itself never lives in the repository: it is restored
+from a secret.
 
 ### Cleartext: the release build has none
 
@@ -264,10 +275,14 @@ Two runner notes, both verified on Node 24:
 
 | Suite | Count | Runner |
 |---|---|---|
-| `packages/protocol` | 29 | vitest |
-| `packages/relay` | 33 | vitest |
-| `packages/bridge` | 74 | node:test |
-| `apps/app` | 32 | jest + jest-expo |
+| `packages/protocol` + `packages/relay` | 205 | vitest |
+| `packages/bridge` | 153 | node:test |
+| `apps/app` | 107 | jest + jest-expo |
+| **Total** | **465** | |
+
+One test is skipped on purpose, so 464 run and 464 pass. The protocol and the
+relay are one vitest run: both are named in the same command, and the split
+between them is the two protocol files and the thirteen relay ones.
 
 ## What the phone can do
 
@@ -320,13 +335,13 @@ The field stays editable in the app, so a self-hosted relay is still one tap awa
 
 ## Two limits worth knowing
 
-**The relay keeps its state in memory.** The device registry, the bridge token and
-the replay ring all live inside the Durable Object, so a restart empties them and
-every paired phone has to pair again. That is a deliberate trade — the hibernation
-API would let the Durable Object be evicted mid-session and silently drop every
-frame — and the client is built for it: the relay accepts the WebSocket and closes
-it with a code that says *why*, so the phone asks for a new pairing code instead of
-retrying a credential that can never work.
+**The relay writes its room down.** The device registry, the account's owner, the
+pairing codes and the replay cursor live in the Durable Object's storage, so a
+restart does not unpair the phones. What a restart *does* lose is the live
+socket: the desktop and the phones reconnect, and the phone asks for a new
+pairing code rather than retrying a credential that can never work. The relay
+accepts the WebSocket and closes it with a code that says *why*, so neither end
+is left guessing.
 
 **The team's task tool answers for one batch at a time.** There is no "list every
 task" call, so the phone rebuilds the list from the batches the bridge has

@@ -44,8 +44,11 @@ body to both. Check the subreddit's rules before you post.
 the words *MiniMax Code* and *M3.1 Flash*, and `#MiniMaxCode`.
 
 **What must never appear:** a pairing code, a token, a local file path, a real name, or
-anything from the team's private memory. The screenshots and the video were recorded against
-the deployed relay and carry none of it.
+anything from the team's private memory. The screenshots carry none of it. The video carries
+no credential and nothing from the team's memory, but it does show one path from the
+author's own machine — `C:\Users\<name>\.minimax\plugins\minimax-bot-bridge` — in the answer
+the model gave about the project. Check whether that should be re-recorded before the video
+goes out.
 
 ---
 
@@ -77,7 +80,7 @@ its work: "tool_search · 15ms", "mcp_invoke · 20ms".
 Then I had three independent reviewers read the code with fresh eyes, having never seen how it
 was written. They found six more defects that would have shipped — among them a regression
 test that passed against the very code it was meant to catch, and a tool trace that measured
-the wrong call whenever the same tool ran twice in a turn. 181 tests pass now, and the new
+the wrong call whenever the same tool ran twice in a turn. 465 tests pass now, and the new
 ones were written to fail against broken code.
 
 Creation note: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
@@ -148,7 +151,7 @@ store and drove it through eight frame orderings. Both found things I had read p
 All of it was built with M3.1 Flash in MiniMax Code. The full story, including the limits I
 did not fix, is here: https://github.com/nattiini45/minimax-bot-mobile/blob/main/docs/CREATION-NOTE.md
 
-181 tests pass across the four packages, and the end-to-end run is against a live team — real
+465 tests pass across the four packages, and the end-to-end run is against a live team — real
 pairing code, real streamed reply, real dispatched task, real memory entries.
 
 Questions welcome. Especially about the relay design and the build pipeline.
@@ -161,45 +164,51 @@ Questions welcome. Especially about the relay design and the build pipeline.
 Post as a thread — six posts, each under X's 280-character limit. Attach the screenshots to
 the first post.
 
-**Post 1/5**
+**Post 1/6**
 
 ```
-I built a native app for the @minimax-bot team — Android, iOS and PWA from one codebase — with M3.1 Flash in MiniMax Code. #MiniMaxCode
+I built a native app for the @minimax-bot team.
+Android, iOS and PWA from one codebase, with M3.1 Flash in MiniMax Code. #MiniMaxCode
 ```
 
-**Post 2/5**
+**Post 2/6**
 
 ```
-The model did the engineering, not just the typing. It worked against a live six-bot team and found six real bugs, including a build-pipeline trap that shipped a stale package and crashed the app on launch.
+The model did the engineering, not just the typing.
+It worked against a live six-bot team and found six real bugs — including a build-pipeline trap that shipped a stale package and crashed the app on launch.
 ```
 
-**Post 3/5**
+**Post 3/6**
 
 ```
-It also found that my client was throwing away the tool-call events the bridge already sent. Wiring them up turns a reply from a long silence into a live trace:
+My client was throwing away tool-call events the bridge already sent.
+Wiring them up turns a reply from a long silence into a live trace:
 
   tool_search · 15ms
   mcp_invoke · 20ms
 ```
 
-**Post 4/5**
+**Post 4/6**
 
 ```
-Then I had three independent reviewers read the code with fresh eyes. They found six more defects that would have shipped — including a regression test that passed against the very code it was meant to catch.
+Then three independent reviewers read the code with fresh eyes.
+They found six more defects that would have shipped — including a regression test that passed against the very code it was meant to catch.
 ```
 
 **Post 5/6**
 
 ```
-Live app (open it, it is the real client): https://n5qi7wnkhcwnd.space.minimax.io
+Live app (it is the real client, not a mock):
+https://n5qi7wnkhcwnd.space.minimax.io
 Source: https://github.com/nattiini45/minimax-bot-mobile
 ```
 
 **Post 6/6**
 
 ```
-Demo video: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
-Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
+Demo video and the signed Android APK:
+https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/demo.mp4
+https://github.com/nattiini45/minimax-bot-mobile/releases/download/v0.1.0/minimax-bot-mobile-release.apk
 ```
 
 ---
@@ -208,7 +217,7 @@ Android APK: https://github.com/nattiini45/minimax-bot-mobile/releases/download/
 
 - [ ] The live link opens from a logged-out browser (test it in a private window).
 - [ ] The demo video shows the real app: pairing, a streamed reply, the live trace.
-- [ ] Both posts name **MiniMax Code** and **M3.1 Flash**, and carry `#MiniMaxCode`.
+- [ ] All three posts name **MiniMax Code** and **M3.1 Flash**, and carry `#MiniMaxCode`.
 - [ ] The Discord entry is posted in `🧩丨show-your-case` with the public link + creation note.
 - [ ] No token, pairing code, local path or personal data appears in any screenshot or clip.
 - [ ] Every post is still public, and will stay public until the winners are announced.

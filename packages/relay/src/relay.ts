@@ -199,9 +199,9 @@ export class Relay extends DurableObject<RelayEnv> {
 
     // The socket is accepted with `server.accept()` rather than
     // `state.acceptWebSocket()`: the hibernation API lets the Durable Object be
-    // evicted while the socket is open, and every piece of this relay's state — the
-    // sequence counter, the replay ring, the device registry — lives in memory. An
-    // eviction would silently reset all of it and drop every frame.
+    // evicted while the socket is open, and the room this socket belongs to would
+    // be rebuilt around an empty buffer — the replay ring and the peers that were
+    // attached to it are gone, and every frame in flight is dropped.
     //
     // Because the socket is *not* a hibernating one, its events are delivered to the
     // listeners registered here. The `webSocketMessage` handler on the class is only
