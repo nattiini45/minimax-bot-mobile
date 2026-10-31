@@ -120,14 +120,17 @@ reply streamed in twelve chunks, and no error frames in the replay**.
   the phones. What a restart does lose is the live socket, and both ends reconnect.
 - The team's task tool answers for one batch at a time, so a task list is explicitly partial —
   the phone says so instead of looking complete.
-- The `v0.1.0` APK was signed with the Expo template's debug keystore. That keystore
+- The first `v0.1.0` APK was signed with the Expo template's debug keystore. That keystore
   is a well-known value, so anyone can produce an APK with the same signing identity
-  and the operating system would take it as an update to an installed one. The asset
-  has been withdrawn.
+  and the operating system would take it as an update to an installed one. That asset
+  was withdrawn and replaced: the `v0.1.0` download is the privately signed build.
 - A release is signed with a private key now. The build signs the artefact it produced
   and publishes only the signed file, and it compares the certificate of that file with
   the expected one before the build is allowed to pass. The native build needs Linux
-  (RN 0.88 hits the 260-character path limit on Windows).
+  (RN 0.88 hits the 260-character path limit on Windows). Anyone can check the download
+  the same way — the published APK's signer certificate has the SHA-256 fingerprint
+  `8aa3670e4010279fa2e4d3594218a8f63aea6a3e0fd1b55179556fdd7c512b59`
+  (`CN=minimax-bot-mobile, OU=Release`).
 - A release build may not speak cleartext at all. The network security config it
   ships forbids it, with no exception for any host, so the device token cannot
   travel in the clear in a build that anybody can install. The loopback exception
