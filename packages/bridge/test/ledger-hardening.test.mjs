@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { Ledger } from '../miniapp/node/ledger.mjs';
 
-const root = resolve('artifacts/test/bridge-execution');
+// The scratch root lives in the operating system's temporary directory, so the suite
+// runs the same way in the workspace, in a published package and in an installed one.
+const root = join(tmpdir(), 'minimax-bot-bridge-tests', 'bridge-execution');
 async function fixture() {
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(join(root, 'ledger-'));
