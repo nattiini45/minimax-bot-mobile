@@ -69,10 +69,10 @@
 | | |
 | --- | --- |
 | **写入的文件** | 仅限 Host 的私有数据目录（`context.dataDir`）：`bridge-config.json`（中继地址、账号 ID、桥接 ID、显示名称、每个 Bot 的回合模式）、`bridge-token`（中继凭据，仅所有者可读）和 `ledger.json`（回合、工具与权限记录——计数与标识，不含消息正文）。每个房间另有 `rooms/<hash>/ledger.json`。 |
-| **读取的文件** | 启动时只读上面这几个文件。没有别的：不读 Host 文件，不读其他插件的文件，不读用户文档。 |
+| **读取的文件** | 启动时读取上面这几个文件。其余文件只在手机请求时读取，且只读：能力列表读取 Host 主目录下的技能（`skills/` 与 `.builtin-skills/` 中各自的 `SKILL.md`）、插件（`plugins/` 与 `v2/plugin-cache/official/` 中各自的 `.minimax-plugin/plugin.json`）、智能体（`agents/*/config.yaml`）和 MCP 服务器注册表（`mcp.json`）；团队、对话历史和 Bot 头像读取 MiniMax Bot 应用自己的数据（`state.json`、`messages/<chat>.json`、`avatars/`）以及官方插件缓存中的形象图。不读用户文档。 |
 | **网络** | 只访问你配置的中继地址，且只走 HTTPS 或 WSS。明文的 `http://`／`ws://` 地址只接受回环地址。`wss://` 和 `https://` 指的是同一个中继，凭据不会在两者之间传递。 |
 | **启动的进程** | 没有。桥接是一个 Node 进程，不派生任何子进程。 |
-| **Agent 回合** | 有——`agentAccess: ["session.run"]`。桥接通过 Host Agent 在自己拥有的会话里运行 Bot 回合，并向它索取模型。它从不读取你的其他对话：没有声明 `session.read`，它展示的团队对话历史来自团队工具。 |
+| **Agent 回合** | 有——`agentAccess: ["session.run"]`。桥接通过 Host Agent 在自己拥有的会话里运行 Bot 回合，并向它索取模型。它从不读取你的其他对话：没有声明 `session.read`，它展示的团队对话历史来自 MiniMax Bot 应用自己的消息文件（见**读取的文件**）以及桥接自己运行的回合。 |
 | **调用的工具** | 有——`toolAccess: ["call"]`。桥接调用 Host 暴露的 `minimax-bot` 团队工具（`mcp__minimax-bot__…`），用来读取团队、群组和对话历史，并发送消息。每次调用都按你的权限规则判定。 |
 | **麦克风** | 不使用。桥接不录音，也不做语音转写。 |
 | **状态存放位置** | Host 的私有数据目录，位置由 Host 管理且不透明。除此之外不写任何文件。中继的状态保存在中继运营方那边。 |
@@ -90,8 +90,19 @@
 
 ## 开发
 
+在发布的插件目录里：
+
 ```sh
 npm test
+```
+
+从[源代码仓库](https://github.com/nattiini45/minimax-bot-mobile)的全新检出运行时，需要先构建共享协议；
+桥接的 `npm test` 会在测试前把它内置到 `miniapp/node/protocol/`：
+
+```sh
+npm ci
+npm run build -w @minimax-bot/protocol
+npm run test -w @minimax-bot/bridge
 ```
 
 测试基于 Node 内置的测试运行器，不需要依赖，也不需要网络。运行时负载是自包含的：只用 Node 标准库，
