@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { Bridge } from '../miniapp/node/bridge.mjs';
 import { loadConfig, saveConfig } from '../miniapp/node/config.mjs';
 import { start } from '../miniapp/node/server.mjs';
 
-const ROOT = fileURLToPath(new URL('../../../artifacts/test/bridge-authority/', import.meta.url));
+// The scratch root lives in the operating system's temporary directory, so the suite
+// runs the same way in the workspace, in a published package and in an installed one.
+const ROOT = join(tmpdir(), 'minimax-bot-bridge-tests', 'bridge-authority');
 const A = { relayUrl: 'https://relay-a.example', accountId: 'a', bridgeId: 'desktop', bridgeToken: 'OLD', bridgeName: 'Desk' };
 const B = { ...A, relayUrl: 'https://relay-b.example', accountId: 'b', bridgeToken: 'B' };
 const settle = () => new Promise(setImmediate);
