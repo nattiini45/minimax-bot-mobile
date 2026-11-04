@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "MiniMax Bot",
+    "slug": "minimax-bot-mobile",
+    "scheme": "minimaxbot",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f2f4f7"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.minimax.botmobile"
+    },
+    "android": {
+      "package": "com.minimax.botmobile",
+      "credentials": {
+        "source": "env"
+      },
+      "adaptiveIcon": {
+        "backgroundColor": "#f2f4f7",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "MiniMax Bot",
+      "shortName": "Minimax Bot",
+      "description": "Your @minimax-bot team in your pocket.",
+      "themeColor": "#f2f4f7",
+      "backgroundColor": "#f2f4f7"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "color": "#2f6fed"
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      "./plugins/with-local-relay-network.cjs",
+      "./plugins/with-workspace-bundle-inputs.cjs"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "protocolVersion": 1
+    }
+  }
+}

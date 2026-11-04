@@ -1,0 +1,10 @@
+# Scripts keep their line endings.
+#
+# A shebang has to be on the very first line. When a script is checked out with
+# CRLF endings the bundler stops recognising the shebang, moves it off the first
+# line, and the file then fails to parse with "Invalid or unexpected token".
+# That is invisible on Linux, where the files are already LF.
+#
+# A CRLF shell script is not runnable either.
+*.mjs text eol=lf
+*.sh text eol=lf

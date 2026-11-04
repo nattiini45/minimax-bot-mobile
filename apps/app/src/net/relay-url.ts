@@ -1,0 +1,107 @@
+/**
+ * The relay address, in the form each transport needs.
+ *
+ * The pairing request is an HTTP POST and the frame channel is a WebSocket, but the
+ * user is given a single address and the scheme they type must not decide which one
+ * works. A `wss://` address cannot be fetched — `fetch` refuses a scheme that is not
+ * HTTP — and an `https://` address is not a WebSocket URL, so the two are translated
+ * into each other instead of failing.
+ *
+ * The translations are done with string operations on purpose: React Native's `URL`
+ * is not a real URL parser and throws on anything but `blob:` and `data:`.
+ */
+
+const TO_HTTP: Record<string, string> = {
+  'http:': 'http:',
+  'https:': 'https:',
+  'ws:': 'http:',
+  'wss:': 'https:',
+};
+
+const TO_WS: Record<string, string> = {
+  'http:': 'ws:',
+  'https:': 'wss:',
+  'ws:': 'ws:',
+  'wss:': 'wss:',
+};
+
+function translate(url: string, schemes: Record<string, string>): string {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  const match = /^([a-z][a-z0-9+.-]*:)/i.exec(trimmed);
+  if (!match) return trimmed;
+  const scheme = match[1]!.toLowerCase();
+  const target = schemes[scheme];
+  if (!target) return trimmed;
+  return target + trimmed.slice(scheme.length);
+}
+
+/** The relay address as an HTTP origin, for the pairing request and the status read. */
+export function relayHttpUrl(url: string): string {
+  return translate(url, TO_HTTP);
+}
+
+/** The relay address as a WebSocket origin, for the frame channel. */
+export function relayWsUrl(url: string): string {
+  return translate(url, TO_WS);
+}
+
+/**
+ * The origin of a relay address, in its HTTP form.
+ *
+ * Two addresses that name one relay have one origin, so an address can be
+ * compared with the origin a credential was minted for.
+ *
+ * The userinfo part is not part of the origin and is dropped: `https://relay.example
+ * @evil.example` reaches `evil.example`, and an origin that still named
+ * `relay.example` would tell the user they are talking to the wrong host.
+ */
+export function relayOrigin(url: string): string {
+  const http = relayHttpUrl(url).trim().replace(/\/+$/, '');
+  const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/\s?#]+)/i.exec(http);
+  if (!match) return '';
+  const scheme = match[1]!.toLowerCase();
+  const authority = match[2]!.toLowerCase();
+  // Everything before the last `@` is the userinfo, which the host does not include.
+  const at = authority.lastIndexOf('@');
+  let host = at >= 0 ? authority.slice(at + 1) : authority;
+  if (!host) return '';
+  // A default port is not part of an origin either: `https://relay.example:443` and
+  // `https://relay.example` are one relay, and the platform says so.
+  const defaultPort = scheme === 'https:' || scheme === 'wss:' ? ':443' : ':80';
+  if (host.endsWith(defaultPort)) host = host.slice(0, -defaultPort.length);
+  return `${scheme}//${host}`;
+}
+
+/**
+ * The hosts a cleartext relay may live on.
+ *
+ * A relay on the loopback interface is on this phone's own machine — the
+ * developer runs it with `wrangler dev` — and that traffic never leaves the
+ * device. Anything else, including a relay on the same wifi, would carry the
+ * pairing code and the device token in the clear.
+ */
+const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * True when the address names a relay the app can reach.
+ *
+ * The address has to be a secure one, unless the relay is on this device. The
+ * pairing code and the device token are long-lived credentials, and a relay
+ * that answers in the clear is a relay that hands them to the network.
+ */
+export function isValidRelayUrl(url: string): boolean {
+  const trimmed = url.trim();
+  const match = /^(https?|wss?):\/\/([^/\s]+)(?:\/.*)?$/i.exec(trimmed);
+  if (!match) return false;
+
+  const scheme = match[1]!.toLowerCase();
+  const authority = match[2]!.toLowerCase();
+  // A relay address never carries credentials, and `https://relay.example@evil.example`
+  // is an address that reaches `evil.example` while it reads like the trusted relay.
+  if (authority.includes('@')) return false;
+  if (scheme === 'https' || scheme === 'wss') return true;
+
+  // Cleartext is the relay on this device and nothing else.
+  const host = authority.replace(/:\d+$/, '').replace(/^\[/, '').replace(/\]$/, '');
+  return LOOPBACK.test(host);
+}

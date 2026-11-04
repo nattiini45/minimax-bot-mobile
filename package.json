@@ -1,0 +1,56 @@
+{
+  "name": "minimax-bot-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native mobile client (web / iOS / Android) for the @minimax-bot team.",
+  "license": "MIT",
+  "author": "@nattiini45 (and contributors)",
+  "type": "module",
+  "packageManager": "npm@12.2.1",
+  "devEngines": {
+    "runtime": { "name": "node", "version": "^22.22.2 || ^24.15.0 || >=26.0.0", "onFail": "error" },
+    "packageManager": { "name": "npm", "version": "12.2.1", "onFail": "error" }
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
+    "npm": "12.2.1"
+  },
+  "workspaces": [
+    "packages/protocol",
+    "packages/relay",
+    "packages/bridge",
+    "apps/app"
+  ],
+  "scripts": {
+    "build": "npm run build -w @minimax-bot/protocol && npm run build -w @minimax-bot/relay && npm run sync:protocol -w @minimax-bot/bridge",
+    "typecheck": "npm run build -w @minimax-bot/protocol && npm run sync:protocol -w @minimax-bot/bridge && npm run typecheck --workspaces --if-present",
+    "test": "npm run build && npm run test -w @minimax-bot/bridge && vitest run && npm run test -w @minimax-bot/app",
+    "test:unit": "vitest run",
+    "test:bridge": "npm run test -w @minimax-bot/bridge --",
+    "test:app": "npm run test -w @minimax-bot/app --",
+    "test:policy": "node --test scripts/test/build-hardening.test.mjs scripts/test/ci-policy.test.mjs scripts/test/install-policy.test.mjs scripts/test/onboarding.test.mjs scripts/test/dependency-policy.test.mjs",
+    "audit:dependencies": "node scripts/check-dependencies.mjs",
+    "export:web": "npm run export:web -w @minimax-bot/app",
+    "build:android": "bash scripts/build-android.sh",
+    "mint:token": "npm run mint:token -w @minimax-bot/relay --",
+    "test:watch": "vitest",
+    "sync:protocol": "npm run sync:protocol -w @minimax-bot/bridge",
+    "app": "npm run start --workspace apps/app"
+  },
+  "devDependencies": {
+    "semver": "7.8.6",
+    "typescript": "~7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "glob": "14.0.3",
+    "minimatch": "11.0.4",
+    "test-exclude": "8.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261103.1": true,
+    "@parcel/watcher@2.6.0": true,
+    "fsevents@2.3.3": false
+  }
+}
