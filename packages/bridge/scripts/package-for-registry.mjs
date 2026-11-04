@@ -22,8 +22,8 @@
  * Usage:
  *   node packages/bridge/scripts/package-for-registry.mjs [--out <dir>]
  */
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -65,24 +65,53 @@ function outputDir(args) {
 }
 
 /**
+ * The path with every symlink in its existing part resolved.
+ *
+ * The destination need not exist yet, so the nearest existing ancestor is resolved and the
+ * rest is appended unchanged.
+ *
+ * @param {string} path Absolute path.
+ * @returns {Promise<string>}
+ */
+async function canonical(path) {
+  const rest = [];
+  let current = path;
+  for (;;) {
+    try {
+      return join(await realpath(current), ...rest);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      const parent = dirname(current);
+      if (parent === current) return path;
+      rest.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
  * Refuses an output directory the recursive removal could harm.
  *
  * The destination is wiped before it is filled, so it must not be, hold or sit inside any
  * source the package is built from. Inside the repository only `dist/` qualifies: it is
  * ignored and generated. Outside the repository any directory that does not contain it does.
+ * The destination is compared with its symlinks resolved, so a link under `dist/` (or `dist`
+ * itself) that points back into the repository is judged by where it really lands.
  *
- * @param {string} out Absolute destination.
+ * @param {string} requested Absolute destination, as given.
  */
-function assertSafeOutput(out) {
+async function assertSafeOutput(requested) {
+  const root = await canonical(repoRoot);
+  const out = await canonical(requested);
+  const dist = join(root, 'dist');
   const inside = (child, parent) => {
     const path = relative(parent, child);
     return path === '' || (!path.startsWith('..') && !isAbsolute(path));
   };
-  if (inside(repoRoot, out)) {
+  if (inside(root, out)) {
     throw new Error(`--out ${out} is or contains the repository; refusing to delete it`);
   }
-  const dist = resolve(repoRoot, 'dist');
-  if (inside(out, repoRoot) && !(inside(out, dist) && out !== dist)) {
+  if (inside(out, root) && !(inside(out, dist) && out !== dist)) {
     throw new Error(`--out ${out} is inside the repository but not under ${dist}; refusing to delete it`);
   }
 }
@@ -230,7 +259,7 @@ async function main() {
     );
   }
 
-  assertSafeOutput(out);
+  await assertSafeOutput(out);
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
 
