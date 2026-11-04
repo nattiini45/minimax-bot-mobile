@@ -23,7 +23,7 @@
  *   node packages/bridge/scripts/package-for-registry.mjs [--out <dir>]
  */
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,29 @@ function outputDir(args) {
   return resolve(repoRoot, value);
 }
 
+/**
+ * Refuses an output directory the recursive removal could harm.
+ *
+ * The destination is wiped before it is filled, so it must not be, hold or sit inside any
+ * source the package is built from. Inside the repository only `dist/` qualifies: it is
+ * ignored and generated. Outside the repository any directory that does not contain it does.
+ *
+ * @param {string} out Absolute destination.
+ */
+function assertSafeOutput(out) {
+  const inside = (child, parent) => {
+    const path = relative(parent, child);
+    return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+  };
+  if (inside(repoRoot, out)) {
+    throw new Error(`--out ${out} is or contains the repository; refusing to delete it`);
+  }
+  const dist = resolve(repoRoot, 'dist');
+  if (inside(out, repoRoot) && !(inside(out, dist) && out !== dist)) {
+    throw new Error(`--out ${out} is inside the repository but not under ${dist}; refusing to delete it`);
+  }
+}
+
 async function exists(path) {
   try {
     await stat(path);
@@ -91,6 +114,20 @@ function rewritePath(repoRelative) {
 }
 
 /**
+ * Rewrites a link target that pointed into the workspace.
+ *
+ * The documents are published under `docs/`, so a link into the bridge is made relative to
+ * that folder; every other link goes to the source repository.
+ *
+ * @param {string} repoRelative Path relative to the repository root.
+ * @returns {string}
+ */
+function rewriteLink(repoRelative) {
+  const path = rewritePath(repoRelative);
+  return path.startsWith(SOURCE_REPO) ? path : `../${path}`;
+}
+
+/**
  * Rewrites the workspace references in a document.
  *
  * @param {string} text
@@ -101,7 +138,7 @@ function rewriteDocument(text) {
   let out = text.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (match, label, target) => {
     if (!/^(?:\.\.\/)?(?:packages|apps|scripts|docs)\//u.test(target)) return match;
     const repoRelative = target.replace(/^\.\.\//u, '');
-    return `[${label}](${rewritePath(repoRelative)})`;
+    return `[${label}](${rewriteLink(repoRelative)})`;
   });
 
   // Inline code spans that hold a workspace path.
@@ -116,11 +153,19 @@ function rewriteDocument(text) {
 /**
  * Fails when a published document still points into the workspace.
  *
+ * A relative link must resolve to a file the package carries, read from the document's own
+ * folder; a code span must not hold a relative path at all.
+ *
  * @param {string} text
  * @param {string} name
+ * @param {string} docsDir The folder the document is published in.
  */
-function assertNoWorkspacePaths(text, name) {
-  const dangling = [...text.matchAll(/\]\((\.\.\/[^)\s]+)\)/gu)].map((match) => match[1]);
+async function assertNoWorkspacePaths(text, name, docsDir) {
+  const dangling = [];
+  for (const match of text.matchAll(/\]\((\.\.\/[^)\s]+)\)/gu)) {
+    const target = match[1].replace(/#.*$/u, '');
+    if (!(await exists(resolve(docsDir, target)))) dangling.push(match[1]);
+  }
   const spans = [...text.matchAll(/`(\.\.\/[^`\n]+)`/gu)].map((match) => match[1]);
   const leftovers = [...dangling, ...spans];
   if (leftovers.length > 0) {
@@ -185,6 +230,7 @@ async function main() {
     );
   }
 
+  assertSafeOutput(out);
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
 
@@ -251,7 +297,7 @@ async function main() {
   for (const name of DOCS) {
     const source = await readFile(join(repoRoot, 'docs', name), 'utf8');
     const rewritten = rewriteDocument(source);
-    assertNoWorkspacePaths(rewritten, name);
+    await assertNoWorkspacePaths(rewritten, name, join(out, 'docs'));
     await writeFile(join(out, 'docs', name), rewritten.replace(/\r\n/gu, '\n'), 'utf8');
   }
 

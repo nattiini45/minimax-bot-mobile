@@ -83,10 +83,10 @@ surface at any time.
 | | |
 | --- | --- |
 | **Files written** | Only inside the Host's private data directory (`context.dataDir`): `bridge-config.json` (relay address, account id, bridge id, display name, per-Bot turn mode), `bridge-token` (the relay credential, written for its owner only) and `ledger.json` (turn, tool and permission records — counters and identifiers, not message text). One `rooms/<hash>/ledger.json` is added per room. |
-| **Files read** | Those same files, on start. Nothing else: no Host files, no other plugins' files, no user documents. |
+| **Files read** | Those same files, on start. The rest are read only when the phone asks, and only read: for the capability list, the Host's skills (`skills/` and `.builtin-skills/`, each `SKILL.md`), plugins (`plugins/` and `v2/plugin-cache/official/`, each `.minimax-plugin/plugin.json`), agents (`agents/*/config.yaml`) and MCP server registry (`mcp.json`) under the Host's home; for the team, its history and Bot pictures, the MiniMax Bot app's own data (`state.json`, `messages/<chat>.json`, `avatars/`) and its look artwork in the official plugin cache. No user documents. |
 | **Network** | The relay address you configure, over HTTPS or WSS only. A cleartext `http://` or `ws://` address is accepted only for a loopback relay. `wss://` and `https://` name the same relay, and the credential never crosses between them. |
 | **Spawned processes** | None. The bridge is one Node process with no child processes. |
-| **Agent turns** | Yes — `agentAccess: ["session.run"]`. The bridge runs a Bot turn through the Host Agent in a session it owns and asks it for a model. It never reads your other conversations: `session.read` is not declared, and the team conversation history it shows comes from the team tools. |
+| **Agent turns** | Yes — `agentAccess: ["session.run"]`. The bridge runs a Bot turn through the Host Agent in a session it owns and asks it for a model. It never reads your other conversations: `session.read` is not declared, and the team conversation history it shows comes from the MiniMax Bot app's own message files (see **Files read**) and the turns the bridge ran itself. |
 | **Tools called** | Yes — `toolAccess: ["call"]`. The bridge calls the `minimax-bot` team tools the Host exposes (`mcp__minimax-bot__…`) to read the team, its groups and its conversation history, and to send messages. Each call is judged by your permission rules. |
 | **Microphone** | Not used. The bridge records no audio and transcribes nothing. |
 | **State** | The Host's private data directory, whose location is opaque and owned by the Host. Nothing is written outside it. The relay keeps its own state on the relay operator's account. |
@@ -108,8 +108,20 @@ surface at any time.
 
 ## Development
 
+In the published plugin directory:
+
 ```sh
 npm test
+```
+
+From a clean checkout of the [source repository](https://github.com/nattiini45/minimax-bot-mobile),
+build the shared protocol first; the bridge's `npm test` vendors it into `miniapp/node/protocol/`
+before the suite runs:
+
+```sh
+npm ci
+npm run build -w @minimax-bot/protocol
+npm run test -w @minimax-bot/bridge
 ```
 
 The suite runs on Node's built-in test runner and needs no dependencies and no network. The
