@@ -95,15 +95,27 @@ async function canonical(path) {
  * The destination is wiped before it is filled, so it must not be, hold or sit inside any
  * source the package is built from. Inside the repository only `dist/` qualifies: it is
  * ignored and generated. Outside the repository any directory that does not contain it does.
- * The destination is compared with its symlinks resolved, so a link under `dist/` (or `dist`
- * itself) that points back into the repository is judged by where it really lands.
+ * Two paths are checked: where the destination really lands (every symlink resolved), and
+ * the entry the removal deletes and the writes recreate (the parent resolved, the last
+ * component kept). `rm` removes a final-component symlink rather than following it, so the
+ * output ends up at that entry, not at the link's target.
  *
  * @param {string} requested Absolute destination, as given.
  */
 async function assertSafeOutput(requested) {
   const root = await canonical(repoRoot);
-  const out = await canonical(requested);
   const dist = join(root, 'dist');
+  const entry = join(await canonical(dirname(requested)), basename(requested));
+  const target = await canonical(requested);
+  for (const out of new Set([entry, target])) assertSafeTarget(out, root, dist);
+}
+
+/**
+ * @param {string} out Canonical destination.
+ * @param {string} root Canonical repository root.
+ * @param {string} dist The repository's `dist/`.
+ */
+function assertSafeTarget(out, root, dist) {
   const inside = (child, parent) => {
     const path = relative(parent, child);
     return path === '' || (!path.startsWith('..') && !isAbsolute(path));
