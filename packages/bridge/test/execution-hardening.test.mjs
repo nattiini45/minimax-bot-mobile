@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { Bridge } from '../miniapp/node/bridge.mjs';
 import { AgentRunner, MAX_CONCURRENT_RUNS } from '../miniapp/node/agent.mjs';
@@ -17,7 +18,9 @@ function deferred() {
 }
 /** @param {any} [agent] @param {Record<string, string>} [botModes] */
 async function fixture(agent = {}, botModes = { b1: 'hosted' }) {
-  const root = resolve('artifacts/test/bridge-execution');
+  // The scratch root lives in the operating system's temporary directory, so the suite
+  // runs the same way in the workspace, in a published package and in an installed one.
+  const root = join(tmpdir(), 'minimax-bot-bridge-tests', 'bridge-execution');
   await mkdir(root, { recursive: true });
   const frames = [], warnings = [];
   const context = { dataDir: await mkdtemp(join(root, 'bridge-')), agent,

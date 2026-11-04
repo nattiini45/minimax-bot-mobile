@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { Bridge } from '../miniapp/node/bridge.mjs';
 import { BotRouter } from '../miniapp/node/bot-router.mjs';
@@ -9,7 +9,9 @@ import { AgentRunner, MAX_CONCURRENT_RUNS } from '../miniapp/node/agent.mjs';
 import { saveConfig } from '../miniapp/node/config.mjs';
 import { TEAM_TOOL_DESCRIPTORS, createFakeTeam } from './fake-team.mjs';
 
-const ROOT = fileURLToPath(new URL('../../../artifacts/test/bridge-rooms/', import.meta.url));
+// The scratch root lives in the operating system's temporary directory, so the suite
+// runs the same way in the workspace, in a published package and in an installed one.
+const ROOT = join(tmpdir(), 'minimax-bot-bridge-tests', 'bridge-rooms');
 const A = { relayUrl: 'https://a.example', accountId: 'a', bridgeId: 'desktop', bridgeToken: 'A', bridgeName: 'Desk' };
 const B = { ...A, relayUrl: 'https://b.example', accountId: 'b', bridgeToken: 'B' };
 const settle = () => new Promise(setImmediate);
